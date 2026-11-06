@@ -29,6 +29,22 @@ input/
 .venv\Scripts\python.exe -m src.cli --rig none --height 2.1
 ```
 
+## เล่นออนไลน์
+
+เปิดได้เลยโดยไม่ต้องติดตั้งอะไร
+
+| | |
+|---|---|
+| <https://thtpk.github.io/COCO/web/> | เดินเล่น — WASD/ลูกศร, Shift วิ่ง |
+| <https://thtpk.github.io/COCO/viewer/> | ดูโมเดล — สลับ clip, โครงกระดูก, รูปทรงล้วน |
+
+Pages เผยแพร่ทั้ง repo ไม่ใช่โฟลเดอร์ย่อย เพราะหน้าเว็บอ้างโมเดลด้วย path
+สัมพัทธ์ (`../output/character_rigged.glb`) และ workflow เปิด Pages ให้เอง
+ด้วย `actions/configure-pages` + `enablement: true` จึงไม่ต้องไปกดเปิดใน
+หน้า Settings ก่อน
+
+## รันในเครื่อง
+
 ดูผลลัพธ์:
 
 ```powershell
