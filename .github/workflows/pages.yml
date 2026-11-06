@@ -1,0 +1,41 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# `pages: write` และ `id-token: write` คือสิทธิ์ที่ configure-pages ใช้เปิด
+# GitHub Pages ให้เอง จึงไม่ต้องไปกดเปิดในหน้า Settings ก่อน
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# ปล่อย deploy ทีละอัน และไม่ยกเลิกอันที่กำลังทำอยู่
+# เพราะการยกเลิกกลางคันอาจทิ้งเว็บไว้ในสภาพครึ่ง ๆ กลาง ๆ
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      # เผยแพร่ทั้ง repo เพราะหน้าเว็บอ้างโมเดลด้วย path สัมพัทธ์
+      # (web/index.html -> ../output/character_rigged.glb)
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+
+      - id: deployment
+        uses: actions/deploy-pages@v4

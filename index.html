@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>2Dto3D — จากภาพ 2D หลายมุม เป็นโมเดล 3D ที่ขยับได้</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; background: #0b0d10; color: #e8eaed;
+         font: 15px/1.7 "Segoe UI", system-ui, sans-serif;
+         display: grid; place-items: center; padding: 32px 20px; }
+  main { width: 100%; max-width: 760px; }
+  h1 { margin: 0 0 6px; font-size: 26px; letter-spacing: .2px; }
+  .sub { margin: 0 0 32px; color: #8b94a3; font-size: 15px; }
+  .cards { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+  a.card { display: block; padding: 20px; border-radius: 12px; text-decoration: none;
+           background: #151922; border: 1px solid #262c36; color: inherit;
+           transition: border-color .15s, transform .15s, background .15s; }
+  a.card:hover { border-color: #3d85d8; background: #19202b; transform: translateY(-2px); }
+  a.card b { display: block; font-size: 17px; margin-bottom: 4px; }
+  a.card span { color: #8b94a3; font-size: 13px; }
+  .keys { margin-top: 10px; color: #6f7886; font-size: 12px; }
+  kbd { display: inline-block; min-width: 19px; padding: 1px 5px; margin-right: 2px;
+        background: #222934; border: 1px solid #39414f; border-bottom-width: 2px;
+        border-radius: 4px; font: 11px/1.5 ui-monospace, monospace; color: #cfd6e0; }
+  section { margin-top: 36px; padding-top: 24px; border-top: 1px solid #222934; }
+  h2 { font-size: 15px; margin: 0 0 10px; color: #c3cad4; }
+  ol { margin: 0; padding-left: 20px; color: #8b94a3; font-size: 14px; }
+  ol li { margin: 5px 0; }
+  code { background: #1b212b; padding: 1px 6px; border-radius: 4px;
+         font: 12px/1.6 ui-monospace, monospace; color: #cfd6e0; }
+  footer { margin-top: 32px; color: #5f6773; font-size: 13px; }
+  footer a { color: #7aa8de; }
+</style>
+</head>
+<body>
+<main>
+  <h1>2Dto3D</h1>
+  <p class="sub">
+    จากภาพตัวละคร 2D สามมุม (หน้า / หลัง / ข้าง) เป็นโมเดล 3D
+    ที่มี texture โครงกระดูก และอนิเมชันพร้อมใช้ใน three.js หรือเกม
+  </p>
+
+  <div class="cards">
+    <a class="card" href="web/">
+      <b>เดินเล่น →</b>
+      <span>บังคับตัวละครเดินและวิ่งไปในฉาก</span>
+      <div class="keys"><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd>
+        หรือปุ่มลูกศร · <kbd>Shift</kbd> วิ่ง</div>
+    </a>
+    <a class="card" href="viewer/">
+      <b>ดูโมเดล →</b>
+      <span>สลับ clip, โครงกระดูก, เส้นโครง, รูปทรงล้วน</span>
+      <div class="keys"><kbd>1</kbd><kbd>2</kbd><kbd>3</kbd> สลับมุมมอง</div>
+    </a>
+  </div>
+
+  <section>
+    <h2>ทำงานยังไง</h2>
+    <ol>
+      <li>แยกตัวละครจากพื้นหลังด้วย GrabCut แล้ว align ทุกมุมให้สูงเท่ากัน</li>
+      <li>ตัดกริด voxel ด้วย silhouette โดยปั้นหน้าตัดเป็นวงรี ไม่ใช่สี่เหลี่ยม</li>
+      <li>marching cubes แล้วเกลาผิวด้วย Taubin smoothing</li>
+      <li>คลี่ UV ด้วย xatlas แล้ว bake texture จากภาพต้นฉบับทั้งสามมุม</li>
+      <li>ประเมินตำแหน่งข้อต่อจากรูปทรง ตั้งชื่อกระดูกตามแบบ Mixamo</li>
+      <li>สร้าง armature อนิเมชัน และ export glTF ผ่าน Blender แบบ headless</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>รันเอง</h2>
+    <ol>
+      <li>วางภาพ <code>front</code> <code>back</code> <code>side</code> ลงใน <code>input/</code></li>
+      <li><code>.venv\Scripts\python.exe -m src.cli --rig blender</code></li>
+      <li>ได้ <code>output/character_rigged.glb</code> ขนาดราว 1.2 MB พร้อม texture และ 3 clip</li>
+    </ol>
+  </section>
+
+  <footer>
+    โค้ดและเอกสารทั้งหมดอยู่ที่
+    <a href="https://github.com/ThTpk/COCO">github.com/ThTpk/COCO</a>
+  </footer>
+</main>
+</body>
+</html>
