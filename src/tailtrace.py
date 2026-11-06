@@ -129,8 +129,16 @@ def trace(view: PreparedView, cfg: PipelineConfig) -> TailTrace | None:
     kernel_o = np.ones((5, 5), bool)
     kernel_c = np.ones((9, 9), bool)
 
+    # ความกว้างลำตัวในช่วงที่มองหาหาง ใช้เป็นไม้บรรทัดตัดสินว่า "แคบ" แค่ไหน
+    body_w = float(np.median([m[y].sum() for y in range(
+        int(ys[0] + cfg.tail_band_top * H), y1 + 1) if m[y].any()] or [S]))
+
+    # เสื้อผ้ากินพื้นที่ส่วนใหญ่ของท่อนล่างเสมอ หางเป็นส่วนน้อย
+    # จึงลองกลุ่มที่เล็กกว่าก่อน แล้วค่อยถอยไปกลุ่มใหญ่ถ้ากลุ่มเล็กใช้ไม่ได้
+    clusters = sorted(_colour_clusters(rgb, band), key=lambda c: int(c.sum()))
+
     best, best_score = None, -1.0
-    for ci, cluster in enumerate(_colour_clusters(rgb, band)):
+    for ci, cluster in enumerate(clusters):
         clean = ndimage.binary_closing(
             ndimage.binary_opening(cluster, kernel_o), kernel_c)
         lab, n = ndimage.label(clean)
@@ -144,12 +152,14 @@ def trace(view: PreparedView, cfg: PipelineConfig) -> TailTrace | None:
         if tr is None:
             continue
 
-        # หางที่ถูกต้องคือท่อนที่ *ยาว* และ *แคบ* เสื้อผ้าจะกว้างแต่สั้น
+        # หางที่ถูกต้องคือท่อนที่ *ยาว* และ *แคบเทียบกับลำตัว*
+        # วัดความแคบเทียบขนาด canvas ไม่ได้ เพราะขากางเกงก็ผ่านเกณฑ์นั้นสบาย ๆ
         span = (tr.rows[-1] - tr.rows[0]) / max(H, 1)
-        narrow = 1.0 - min(1.0, float(np.median(tr.half_w) * 2) / (0.35 * S))
+        width = float(np.median(tr.half_w) * 2)
+        narrow = 1.0 - min(1.0, width / max(0.5 * body_w, 1.0))
         score = span * max(narrow, 0.05)
-        log.debug("กลุ่มสีที่ %d: พาด %.0f%% ของตัว กว้างกลาง %.0f px คะแนน %.3f",
-                  ci, 100 * span, 2 * np.median(tr.half_w), score)
+        log.debug("กลุ่มสีขนาด %d px: พาด %.0f%% กว้างกลาง %.0f (ลำตัว %.0f) คะแนน %.3f",
+                  int(cluster.sum()), 100 * span, width, body_w, score)
         if score > best_score:
             best, best_score = tr, score
 

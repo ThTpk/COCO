@@ -622,6 +622,7 @@ def _add_tail_tube(
 def _fill_elliptical(
     fb: np.ndarray, sd: np.ndarray, cfg: PipelineConfig,
     tail_rows: np.ndarray | None = None,
+    tail_span: np.ndarray | None = None,
 ) -> np.ndarray:
     """สร้างหน้าตัดเป็นวงรีแทนสี่เหลี่ยม
 
@@ -666,6 +667,8 @@ def _fill_elliptical(
     pruned_count = 0
     if tail_rows is None:
         tail_rows = np.zeros(ny, bool)
+    if tail_span is None:
+        tail_span = np.zeros((ny, 2), np.float32)
 
     for y in range(ny):
         x_runs = _runs(fb[y], min_run)
@@ -674,17 +677,27 @@ def _fill_elliptical(
         if len(_runs(sd[y], 1)) > 1:
             dropped_rows += 1
 
-        # ในช่วงที่มีหาง ท่อนที่ไม่ใช่ลำตัว/ขา คือเนื้อหาง ปล่อยให้ขั้นปั้นหาง
-        # จัดการที่ความลึกที่ถูกต้อง ไม่งั้นจะได้หางสองอันคนละความลึก
+        # ในช่วงที่มีหาง ตัดออกเฉพาะท่อนที่ *ทับตำแหน่งหางจริง* เท่านั้น
         #
-        # ปลอดภัยเพราะช่วงที่มีหางอยู่ต่ำกว่าระดับมือเสมอ ท่อนนอกลำตัว/ขา
-        # ในช่วงนั้นจึงไม่ใช่มือแน่นอน และยังกันอีกชั้นด้วยการไม่ตัดท่อนที่
-        # หนาใกล้เคียงขา เผื่อการติดตามขาหลุดไปบางแถว
+        # เคยเขียนว่า "ท่อนที่ไม่ใช่ลำตัว/ขา คือหาง" แล้วแทนทั้งแถวด้วยท่อน
+        # ลำตัว/ขา ซึ่งใช้ได้ตอนที่ช่วงหางอยู่ต่ำกว่าระดับมือเสมอ
+        # พอเปลี่ยนมาลากหางจากภาพหลัง ช่วงหางขยายขึ้นไปคลุมระดับมือด้วย
+        # แขนกับมือจึงถูกทิ้งหมด เหลือแต่ตอ
+        #
+        # ตอนนี้รู้ตำแหน่งกับความกว้างของหางรายแถวแล้ว จึงเทียบได้ตรง ๆ ว่า
+        # ท่อนไหนคือหาง ท่อนที่อยู่ไกลออกไป (แขน มือ) ไม่ถูกแตะเลย
         if tail_rows[y] and limb_runs[y]:
-            trimmed = sum((b - a) for a, b in x_runs) -                       sum((b - a) for a, b in limb_runs[y])
-            if trimmed > 0:
-                pruned_count += 1
-            x_runs = limb_runs[y]
+            core = limb_runs[y]
+            t0, t1 = tail_span[y]
+            kept = list(core)
+            for r in x_runs:
+                if any(r[0] <= c[0] and c[1] <= r[1] for c in core):
+                    continue              # ท่อนลำตัว/ขา มีตัวที่เล็มแล้วแทนอยู่
+                if r[0] <= t1 and t0 <= r[1]:
+                    pruned_count += 1
+                    continue              # ทับหาง ปล่อยให้ขั้นปั้นหางจัดการ
+                kept.append(r)            # ไกลจากหาง = แขน/มือ เก็บไว้
+            x_runs = sorted(kept)
 
         cz = float(cz_profile[y])
         rz_full = float(rz_profile[y])
@@ -780,12 +793,18 @@ def carve(views: dict[str, PreparedView], cfg: PipelineConfig) -> HullGrid:
             trace = tailtrace.trace(views["back"], cfg)
 
         tail_rows = np.zeros(ny, bool)
+        tail_span = np.zeros((ny, 2), np.float32)
         tail_vox = None
         if trace is not None:
             tail_vox = _trace_to_voxels(trace, grid, ny, nx)
-            tail_rows[tail_vox[:, 1].astype(int)] = True
+            for ix, iy, hw in tail_vox:
+                r = int(iy)
+                if 0 <= r < ny:
+                    tail_rows[r] = True
+                    pad = hw * cfg.tail_prune_pad
+                    tail_span[r] = (ix - pad, ix + pad)
 
-        occ, czp, rzp, valid = _fill_elliptical(fb, sd, cfg, tail_rows)
+        occ, czp, rzp, valid = _fill_elliptical(fb, sd, cfg, tail_rows, tail_span)
 
         if tail_vox is not None:
             grid.tail_path = _add_tail_tube(occ, tail_vox, czp, rzp, valid, cfg)
