@@ -10,6 +10,8 @@ import json
 import logging
 import sys
 import time
+
+import numpy as np
 from pathlib import Path
 
 from . import export as export_mod
@@ -98,6 +100,15 @@ def build_parser() -> argparse.ArgumentParser:
                    help="ความสูงจริงของตัวละคร (เมตร)")
 
     g = p.add_argument_group("มือ / เท้า")
+    g.add_argument("--base-mesh", action="store_true",
+                   help="ทดลองใช้โมเดลฐานใน input/ แทนรูปทรงจาก hull "
+                        "(ยังพัฒนาไม่เสร็จ ผลปัจจุบันแย่กว่า hull)")
+    g.add_argument("--no-base-pose", action="store_true",
+                   help="ไม่ต้องหมุนท่าโมเดลฐานด้วย armature ก่อนดัด")
+    g.add_argument("--no-fit-volume", action="store_true",
+                   help="ไม่ต้องอัดปริมาตรโมเดลฐานให้ชนเงา")
+    g.add_argument("--volume-max", type=float, default=d.volume_max,
+                   help="เพดานการขยายหน้าตัดของโมเดลฐาน")
     g.add_argument("--no-detail-hands", action="store_true",
                    help="ไม่ต้องกันเขตมือออกจากกฎเกลาผิวของลำตัว (มือจะเป็นนวม)")
     g.add_argument("--no-detail-feet", action="store_true",
@@ -168,6 +179,10 @@ def config_from_args(a: argparse.Namespace) -> PipelineConfig:
         detail_hands=not a.no_detail_hands,
         detail_feet=not a.no_detail_feet,
         use_sole_plan=not a.no_sole_plan,
+        use_base_mesh=a.base_mesh,
+        base_pose=not a.no_base_pose,
+        fit_volume=not a.no_fit_volume,
+        volume_max=a.volume_max,
         detail_blur=a.detail_blur,
         palm_round=a.palm_round,
         hand_length_frac=a.hand_length_frac,
@@ -208,6 +223,62 @@ def run(a: argparse.Namespace) -> int:
 
     banner(3, total, "สร้าง mesh: marching cubes -> smooth -> decimate")
     mesh = meshing.build(grid, cfg)
+
+    # --- โมเดลฐาน: ดัดโมเดลที่ถูกต้องอยู่แล้วให้เข้าสัดส่วนตัวละคร -----------
+    #
+    # ต้องทำตรงนี้ *ก่อน* ขั้น texture เพราะขั้นนั้นต้องฉายสีลงบน mesh ตัวจริง
+    # ที่จะถูก export ไม่ใช่ตัวที่ถูกทิ้ง และต้องทำ *หลัง* meshing เพราะต้องใช้
+    # mesh จาก hull มาอนุมาน transform ระหว่างพิกัด voxel กับเมตร
+    base_notes: list[str] = []
+    if cfg.use_base_mesh:
+        from . import basefit, basemesh
+        base_path = basemesh.find(a.input)
+        if base_path is not None:
+            skel_pre = landmarks.estimate(grid, cfg)
+            ref_world = meshing.to_world(mesh, grid, cfg.character_height_m)
+            joints_m = skel_pre.to_world(mesh.verts, ref_world)
+
+            base = basemesh.load(base_path, cfg)
+            fitted, fit_faces, base_notes = basefit.fit_skeleton(
+                base, joints_m, cfg)
+            verts_vox = basefit.world_to_voxel(fitted, mesh.verts, ref_world)
+            if cfg.fit_volume:
+                # ข้อต่อของตัวละครในพิกัด voxel — ใช้ตัวเดียวกับที่ประเมินมา
+                jv = {k: np.asarray(v, float) for k, v in skel_pre.joints.items()}
+                verts_vox = basefit.fit_volume(verts_vox, fit_faces,
+                                               grid.occupancy, jv, cfg)
+            # หัวมีวิธีของตัวเอง: TPS ลากผิวหน้าไปหาผิวหัวใน hull โดยตรง
+            # การขยายตามรัศมีทำปากที่ยื่นไปทางเดียวไม่ได้
+            verts_vox = basefit.fit_head(verts_vox, grid.occupancy, jv, cfg)
+            # ต่อหางเข้าไป: โมเดลฐานเป็นคน จึงไม่มีหางมาให้ ต่างจากเส้นทาง
+            # hull ที่หางโผล่มาเองเพราะปั้นทุกอย่างจาก occupancy ก้อนเดียวกัน
+            if cfg.attach_tail and grid.tail_path is not None:
+                hips = skel_pre.joints.get("Hips")
+                tv, tf = basefit.build_tail_mesh(
+                    grid.tail_path, grid.tail_radius,
+                    segments=cfg.tail_segments, thickness=cfg.tail_thickness,
+                    anchor=None if hips is None else np.asarray(hips, float),
+                    blend=cfg.tail_root_blend)
+                if len(tv):
+                    verts_vox, fit_faces = basefit.attach(
+                        [(verts_vox, fit_faces), (tv, tf)])
+                    log.info("ต่อหางเข้ากับโมเดลฐาน: +%d verts / +%d tris",
+                             len(tv), len(tf))
+            mesh = meshing.MeshData(verts=verts_vox, faces=fit_faces)
+            # ต้องคิด normal ใหม่: ขั้น texture กับ export ต้องใช้ และ normal
+            # เดิมของโมเดลฐานใช้ไม่ได้แล้วหลังโดนดัด
+            #
+            # คิดเองด้วย numpy ไม่เรียก meshing.orient เพราะ open3d ข้างในนั้น
+            # segfault ทั้ง process กับ mesh ที่มาจากโมเดลฐาน (จับไม่ได้ด้วย
+            # try/except) และ winding ของโมเดลฐานถูกต้องมาแต่ต้นอยู่แล้ว
+            mesh.normals = basefit.vertex_normals(mesh.verts, mesh.faces)
+            mesh.log_stage(f"ดัดโมเดลฐาน {base_path.name}")
+            log.info("ใช้โมเดลฐานแทนผล hull: %d verts / %d tris",
+                     mesh.n_verts, mesh.n_faces)
+            warnings.extend(base_notes)
+        else:
+            log.info("ไม่เจอโมเดลฐานใน %s — ใช้รูปทรงจาก visual hull ตามเดิม",
+                     a.input)
 
     banner(4, total, "ฉายสีจากภาพลงบน mesh")
     tex_img = None

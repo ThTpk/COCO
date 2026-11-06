@@ -269,6 +269,75 @@ def _z_center(solid: np.ndarray, iy: float, ix: float) -> float:
 # ---------------------------------------------------------------------------
 
 
+@dataclass
+class ArmTrace:
+    """แขนข้างหนึ่งที่อ่านจาก silhouette ด้านหน้า (พิกัด voxel)"""
+
+    rows: np.ndarray        # แถวจากปลายนิ้วขึ้นไปหารักแร้
+    cx: np.ndarray          # ศูนย์กลางของท่อนแขนในแต่ละแถว
+    half_w: np.ndarray      # ครึ่งความกว้าง
+    y_wrist: int            # แถวของข้อมือ
+    side: int               # -1 = ฝั่งซ้ายของภาพ, +1 = ฝั่งขวา
+
+    def at_row(self, y: float) -> float:
+        """ศูนย์กลางแขนที่ความสูง y (แทรกค่าเชิงเส้น)"""
+        return float(np.interp(y, self.rows, self.cx))
+
+    def arc_fraction(self, f: float) -> tuple[float, float]:
+        """จุดที่ f ส่วนของ *ความยาวตามแนวแขน* นับจากรักแร้ลงมา"""
+        pts = np.stack([self.cx, self.rows.astype(float)], axis=1)[::-1]
+        seg = np.linalg.norm(np.diff(pts, axis=0), axis=1)
+        s = np.concatenate(([0.0], np.cumsum(seg)))
+        if s[-1] <= 1e-9:
+            return float(pts[0, 0]), float(pts[0, 1])
+        t = float(np.clip(f, 0.0, 1.0)) * s[-1]
+        return (float(np.interp(t, s, pts[:, 0])),
+                float(np.interp(t, s, pts[:, 1])))
+
+
+def trace_arms(front: np.ndarray, cfg: PipelineConfig | None,
+               y_foot: int, H: int) -> list[ArmTrace]:
+    """ไล่ตามแขนสองข้างใน silhouette ด้านหน้า คืนแกนกลางของแต่ละข้าง
+
+    ทำไมต้องไล่ตามทีละแถว แทนที่จะหา "จุดที่ยื่นออกข้างสุด" แบบเดิม:
+    วิธีเดิมสมมติว่าแขนเหยียดเฉียงออกแบบ A-pose จุดที่ยื่นสุดจึงเป็นปลายมือ
+    แต่ตัวละครที่ปล่อยแขนลงแนบตัว จุดที่ยื่นออกข้างสุดคือ *ท่อนแขนช่วงกล้าม*
+    ไม่ใช่มือ ข้อมือเลยถูกวางสูงเกินจริงและข้อศอกไปตกกลางต้นแขน
+    (ตัวประเมินเองก็เตือนว่า "ช่วงแขนแคบกว่าไหล่มาก")
+
+    การไล่ตามท่อนแขนให้ *แกนกลางจริง* ของแขนมาทั้งเส้น ข้อต่อจึงวางบนแกนนั้น
+    ได้ตรงไม่ว่าแขนจะเหยียดหรือแนบตัว
+    """
+    from .extremities import _arm_runs, _contiguous_band, _hand_span
+
+    out: list[ArmTrace] = []
+    nx = front.shape[1]
+    min_run = max(1, nx // 110)
+    # ไม่ให้เขตเท้ามาปน: ส่งพื้นเป็นแถวล่างสุด 10% ของความสูง
+    left, right = _arm_runs(front, min_run, y_foot + int(0.10 * H))
+
+    for side, arm in ((-1, left), (1, right)):
+        band = _contiguous_band(arm, front.shape[0], max(8, int(0.08 * H)))
+        if band is None:
+            continue
+        span = _hand_span(arm, band, cfg) if cfg is not None else None
+        y_tip, y_top = band
+        rows, cx, hw = [], [], []
+        for y in range(y_tip, y_top + 1):
+            r = arm[y]
+            if r is None:
+                continue
+            rows.append(y)
+            cx.append(0.5 * (r[0] + r[1]))
+            hw.append(0.5 * (r[1] - r[0] + 1))
+        if len(rows) < 6:
+            continue
+        y_wrist = span[1] if span else y_tip + int(0.4 * (y_top - y_tip))
+        out.append(ArmTrace(np.array(rows), np.array(cx, float),
+                            np.array(hw, float), int(y_wrist), side))
+    return out
+
+
 def estimate(grid: HullGrid, cfg: PipelineConfig | None = None) -> Skeleton:
     """อ่านตำแหน่งข้อต่อจากกริด occupancy"""
     solid = grid.occupancy > 0.5
@@ -458,13 +527,40 @@ def estimate(grid: HullGrid, cfg: PipelineConfig | None = None) -> Skeleton:
         "HeadTop_End": J(body_cx, y_head - 0.01 * H),
     }
 
-    for side, sh_x, hand in (("Left", left_sh_x, left_hand),
-                             ("Right", right_sh_x, right_hand)):
+    # --- แขน: วางข้อต่อบนแกนกลางของท่อนแขนที่ไล่ตามมาจากภาพ ----------------
+    #
+    # ใช้แกนกลางจริงแทนการลากเส้นตรงจากไหล่ไปจุดที่ยื่นออกข้างสุด เพราะ
+    # จุดที่ยื่นสุดคือกล้ามท่อนแขน ไม่ใช่มือ เมื่อแขนปล่อยลงแนบตัว
+    traced = {t.side: t for t in trace_arms(front, cfg, y_foot, H)}
+    for side, sh_x in (("Left", left_sh_x), ("Right", right_sh_x)):
+        want = 1 if sh_x > body_cx else -1
+        arm = traced.get(want)
         sh = J(sh_x, shoulder_y)
-        hx, hy = hand
-        # ข้อมืออยู่ลึกเข้ามาจากปลายสุดของ silhouette เล็กน้อย (ปลายสุดคือนิ้ว)
-        wrist = J(sh_x + 0.92 * (hx - sh_x), shoulder_y + 0.92 * (hy - shoulder_y))
-        elbow = J(0.5 * (sh[0] + wrist[0]), 0.5 * (sh[1] + wrist[1]))
+
+        if arm is not None and arm.rows.size >= 6:
+            # วางข้อศอกกับข้อมือด้วยสัดส่วน *ตามความยาวแกนแขน* นับจากรักแร้
+            #
+            # เคยใช้ `hand_length_frac` (0.42) มากำหนดข้อมือ ซึ่งผิดวัตถุประสงค์:
+            # ค่านั้นตั้งไว้ให้ *เขตกันเบลอ* ของมือกว้างเผื่อ ๆ ไม่ใช่ตำแหน่ง
+            # ข้อต่อ ผลคือข้อศอกกับข้อมือห่างกันแค่ 4 ซม. ขณะที่ต้นแขนยาว 32 ซม.
+            #
+            # แถบที่ไล่ตามได้เริ่มที่ *รักแร้* ไม่ใช่หัวไหล่ สัดส่วนจึงคิดจาก
+            # ช่วงรักแร้ถึงปลายนิ้ว: ข้อศอกราว 1/3 ข้อมือราว 2/3 ของช่วงนั้น
+            ex, ey = arm.arc_fraction(cfg.elbow_frac if cfg else 0.32)
+            elbow = J(ex, ey)
+            wx, wy = arm.arc_fraction(cfg.wrist_frac if cfg else 0.70)
+            wrist = J(wx, wy)
+        else:
+            notes.append(
+                f"ไล่ตามแขนฝั่ง{'ซ้าย' if side == 'Left' else 'ขวา'}ในภาพไม่สำเร็จ "
+                "— ถอยไปใช้วิธีเดิมที่เดาจากจุดยื่นออกข้างสุด"
+            )
+            hand = left_hand if side == "Left" else right_hand
+            hx, hy = hand
+            wrist = J(sh_x + 0.92 * (hx - sh_x),
+                      shoulder_y + 0.92 * (hy - shoulder_y))
+            elbow = J(0.5 * (sh[0] + wrist[0]), 0.5 * (sh[1] + wrist[1]))
+
         joints[f"{side}Shoulder"] = J(body_cx + 0.35 * (sh_x - body_cx), shoulder_y)
         joints[f"{side}Arm"] = sh
         joints[f"{side}ForeArm"] = elbow

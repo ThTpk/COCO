@@ -43,6 +43,9 @@ class HullGrid:
     canvas: int
     # แกนกลางของหาง ถ้าตรวจเจอ: จุดเรียงจากโคนไปปลาย ในพิกัด voxel (ix, iy, iz)
     tail_path: np.ndarray | None = None
+    # รัศมีหางที่แต่ละจุดบน tail_path (หน่วย voxel) — ใช้ปั้นหางเป็น mesh จริง
+    # ตอนที่ใช้โมเดลฐาน ซึ่งไม่ได้ผ่าน marching cubes จาก occupancy
+    tail_radius: np.ndarray | None = None
 
     @property
     def shape(self) -> tuple[int, int, int]:
@@ -864,14 +867,15 @@ def _add_tail_tube(
 
         # เก็บเส้นกระดูกแถวละจุด พอสำหรับวางโซ่กระดูกหาง
         if y != last_row:
-            path.append((float(ix), float(y), czt))
+            path.append((float(ix), float(y), czt, r))
             last_row = y
 
     if not path:
-        return None
+        return None, None
     log.info("ปั้นหางตามภาพด้านหลัง %d ลูกกลม / %d แถว (+%.1f%% ของปริมาตรตัว)",
              len(tail_vox), len(path), 100 * (occ.sum() - before) / max(before, 1))
-    return np.array(path, np.float32)
+    arr = np.array(path, np.float32)
+    return arr[:, :3], arr[:, 3]
 
 
 def _fill_elliptical(
@@ -1239,7 +1243,8 @@ def carve(views: dict[str, PreparedView], cfg: PipelineConfig,
             fb, sd, cfg, tail_rows, tail_span, ext, sole_plans)
 
         if tail_vox is not None:
-            grid.tail_path = _add_tail_tube(occ, tail_vox, czp, rzp, valid, cfg)
+            grid.tail_path, grid.tail_radius = _add_tail_tube(
+                occ, tail_vox, czp, rzp, valid, cfg)
     else:
         # โหมด hull ตามนิยาม ใช้ช่วง Z ทั้งหมดอยู่แล้ว หางจึงติดมาเอง
         occ = fb[:, :, None] & sd[:, None, :]
