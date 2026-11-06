@@ -62,7 +62,16 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--cross-section-power", type=float, default=d.cross_section_power,
                    help="2 = วงรี, สูงขึ้น = เข้าใกล้สี่เหลี่ยมมุมมน")
     g.add_argument("--max-aspect", type=float, default=d.max_aspect,
-                   help="เพดานอัตราส่วน ลึก/กว้าง ของหน้าตัดลำตัว 0 = ไม่จำกัด")
+                   help="เพดาน ลึก/กว้าง ของ *หัว* 0 = ไม่จำกัด "
+                        "(เปิดเมื่อปากยาวไปลากความลึกของบ่าจนเกิดปีกหมวกรอบคอ)")
+    g.add_argument("--body-aspect", type=float, default=d.body_aspect,
+                   help="เพดาน ลึก/กว้าง ของลำตัวกับขา ตัดหางที่เชื่อมติดมาในมุมข้าง")
+    g.add_argument("--no-neck", action="store_true",
+                   help="ไม่ต้องเซาะซอกคอ (หัวจะกลืนเป็นทรงกรวยต่อกับไหล่)")
+    g.add_argument("--neck-width", type=float, default=d.neck_width,
+                   help="ความกว้างลำคอ เป็นกี่เท่าของครึ่งความกว้างหัว")
+    g.add_argument("--neck-shoulder", type=float, default=d.neck_shoulder_min,
+                   help="สันบ่าใต้คางบางแค่ไหน (1 = ไม่เซาะ, ต่ำ = คอเด่นขึ้น)")
     g.add_argument("--crest-width", type=float, default=d.crest_width,
                    help="ความกว้างสันหนามเทียบกับความกว้างหัว 0 = ไม่คืนหนาม")
     g.add_argument("--spike-open", type=int, default=d.spike_open,
@@ -87,6 +96,20 @@ def build_parser() -> argparse.ArgumentParser:
                    help="งบ triangle ของ mesh สุดท้าย")
     g.add_argument("--height", type=float, default=d.character_height_m,
                    help="ความสูงจริงของตัวละคร (เมตร)")
+
+    g = p.add_argument_group("มือ / เท้า")
+    g.add_argument("--no-detail-hands", action="store_true",
+                   help="ไม่ต้องกันเขตมือออกจากกฎเกลาผิวของลำตัว (มือจะเป็นนวม)")
+    g.add_argument("--no-detail-feet", action="store_true",
+                   help="ไม่ต้องกันเขตเท้าออกจากกฎเกลาผิวของลำตัว")
+    g.add_argument("--no-sole-plan", action="store_true",
+                   help="ไม่ใช้ภาพมุมล่าง (down/sole/bottom) เป็นผังฝ่าเท้า")
+    g.add_argument("--detail-blur", type=float, default=d.detail_blur,
+                   help="เบลอเขตมือ/เท้าด้วย sigma เท่านี้ (ลำตัวใช้ --hull-blur)")
+    g.add_argument("--palm-round", type=float, default=d.palm_round,
+                   help="ความหนาฝ่ามือเป็นกี่เท่าของความกว้างมือ")
+    g.add_argument("--hand-length-frac", type=float, default=d.hand_length_frac,
+                   help="ความยาวมือคิดเป็นกี่ส่วนของความยาวแขนที่แยกจากลำตัว")
 
     g = p.add_argument_group("ภาพ")
     g.add_argument("--canvas", type=int, default=d.canvas, help="ความละเอียด canvas ที่ align")
@@ -134,10 +157,20 @@ def config_from_args(a: argparse.Namespace) -> PipelineConfig:
         side_main_component_only=not a.keep_side_extras,
         spike_open=a.spike_open,
         max_aspect=a.max_aspect,
+        body_aspect=a.body_aspect,
+        neck_carve=not a.no_neck,
+        neck_width=a.neck_width,
+        neck_shoulder_min=a.neck_shoulder,
         crest_width=a.crest_width,
         silhouette_smooth=a.silhouette_smooth,
         depth_median=a.depth_median,
         keep_tail=not a.no_tail,
+        detail_hands=not a.no_detail_hands,
+        detail_feet=not a.no_detail_feet,
+        use_sole_plan=not a.no_sole_plan,
+        detail_blur=a.detail_blur,
+        palm_round=a.palm_round,
+        hand_length_frac=a.hand_length_frac,
         tail_bones=a.tail_bones,
         profile_smooth=a.profile_smooth,
         taubin_iters=a.smooth,
@@ -164,7 +197,11 @@ def run(a: argparse.Namespace) -> int:
     views = prepare_views(a.input, cfg, debug_dir, flip_side=a.flip_side)
 
     banner(2, total, "Visual hull: ตัด voxel ด้วย silhouette")
-    grid = visual_hull.carve(views, cfg)
+    # ภาพมุมล่าง (ถ้ามี) ไม่เข้า visual hull เพราะเป็นภาพ perspective
+    # ใช้เป็นผังฝ่าเท้าอย่างเดียว ดูเหตุผลใน soleplan.py
+    from . import soleplan
+    sole_plans = soleplan.load(a.input, cfg)
+    grid = visual_hull.carve(views, cfg, sole_plans)
     for note in visual_hull.carve_report(grid, views):
         log.warning("คุณภาพ hull: %s", note)
         warnings.append(note)

@@ -75,7 +75,18 @@ def _colour_clusters(rgb: np.ndarray, band: np.ndarray, k: int = 2) -> list[np.n
 
 def _track(mask: np.ndarray, body_cx: float, y_top: int, y_bot: int,
            min_run: int, max_jump: float) -> TailTrace | None:
-    """ไล่ตามท่อนเดียวกันจากโคนลงไปหาปลาย ด้วยความต่อเนื่องของตำแหน่ง"""
+    """ไล่ตามท่อนเดียวกันจากโคนลงไปหาปลาย ด้วยความต่อเนื่องของตำแหน่ง
+
+    ความหนาของหางวัดจาก *distance transform* ไม่ใช่ความยาวของ run ในแถวนั้น
+
+    ทำไมถึงสำคัญมาก: หางสะบัดเป็นแนวเฉียงจนเกือบนอน ช่วงที่มันนอน run ใน
+    แถวเดียวคือ *ความยาวของหางช่วงนั้น* ไม่ใช่ความหนา ตัวเลขจึงพุ่งจาก 20 px
+    ไปเป็น 200 px แล้วหางที่ปั้นออกมากลายเป็นแผ่นชั้นแบน ๆ ยื่นออกจากสะโพก
+    distance transform ให้รัศมีที่ตั้งฉากกับแนวหางเสมอ ไม่ว่าหางจะเอียงเท่าไร
+    """
+    dist = ndimage.distance_transform_edt(mask)
+    assert dist is not None
+
     start = None
     for y in range(y_top, min(y_bot, y_top + (y_bot - y_top) // 3)):
         rr = _runs(mask[y], min_run)
@@ -95,10 +106,12 @@ def _track(mask: np.ndarray, body_cx: float, y_top: int, y_bot: int,
         r = min(rr, key=lambda q: abs(0.5 * (q[0] + q[1]) - c))
         if abs(0.5 * (r[0] + r[1]) - c) > max_jump:
             continue          # กระโดดไกลเกินไป ไม่ใช่ท่อนเดียวกัน
-        c = 0.5 * (r[0] + r[1])
+        # จุดกึ่งกลางคือจุดที่ "ลึกที่สุด" ในท่อน ซึ่งอยู่บนแกนกลางหางจริง ๆ
+        seg = dist[y, r[0] : r[1] + 1]
+        c = float(r[0] + int(np.argmax(seg)))
         rows.append(y)
         cxs.append(c)
-        hws.append(0.5 * (r[1] - r[0] + 1))
+        hws.append(float(seg.max()))
 
     if len(rows) < 8:
         return None
@@ -152,14 +165,30 @@ def trace(view: PreparedView, cfg: PipelineConfig) -> TailTrace | None:
         if tr is None:
             continue
 
-        # หางที่ถูกต้องคือท่อนที่ *ยาว* และ *แคบเทียบกับลำตัว*
-        # วัดความแคบเทียบขนาด canvas ไม่ได้ เพราะขากางเกงก็ผ่านเกณฑ์นั้นสบาย ๆ
+        # หางที่ถูกต้องคือท่อนที่ ยาว + แคบเทียบลำตัว + *เรียวลงไปทางปลาย*
+        #
+        # สองข้อแรกอย่างเดียวไม่พอ: ขากางเกงข้างหนึ่งก็ยาวและแคบพอ ๆ กัน
+        # (วัดได้ว่าคะแนนชนะหางด้วยซ้ำ แล้วโมเดลได้ "หาง" ที่เป็นขาซ้ำอีกขา)
+        # สิ่งที่หางมีแต่ขาไม่มีคือ *ความเรียว* — หางเล็กลงเรื่อย ๆ จนเป็นปลาย
+        # แหลม ส่วนขาจบลงด้วยเท้าซึ่งกว้างกว่าน่อง เพิ่มโบนัสให้ท่อนที่ส่าย
+        # ออกข้างด้วย แต่ให้น้ำหนักน้อย เพราะหางที่ห้อยตรง ๆ ก็มีเยอะ
         span = (tr.rows[-1] - tr.rows[0]) / max(H, 1)
         width = float(np.median(tr.half_w) * 2)
         narrow = 1.0 - min(1.0, width / max(0.5 * body_w, 1.0))
-        score = span * max(narrow, 0.05)
-        log.debug("กลุ่มสีขนาด %d px: พาด %.0f%% กว้างกลาง %.0f (ลำตัว %.0f) คะแนน %.3f",
-                  int(cluster.sum()), 100 * span, width, body_w, score)
+
+        q = max(2, len(tr) // 4)
+        w_base = float(np.median(tr.half_w[:q]))
+        w_tip = float(np.median(tr.half_w[-q:]))
+        taper = float(np.clip(1.0 - w_tip / max(w_base, 1e-6), 0.0, 1.0))
+
+        drift = float(np.abs(np.diff(tr.cx)).sum())
+        sweep = float(np.clip(drift / max(tr.rows[-1] - tr.rows[0], 1), 0.0, 1.0))
+
+        score = span * max(narrow, 0.05) * (0.25 + 0.75 * taper) \
+            * (0.85 + 0.15 * sweep)
+        log.debug("กลุ่มสีขนาด %d px: พาด %.0f%% กว้างกลาง %.0f (ลำตัว %.0f) "
+                  "เรียว %.2f ส่าย %.2f คะแนน %.3f",
+                  int(cluster.sum()), 100 * span, width, body_w, taper, sweep, score)
         if score > best_score:
             best, best_score = tr, score
 
@@ -168,15 +197,25 @@ def trace(view: PreparedView, cfg: PipelineConfig) -> TailTrace | None:
                  max(best_score, 0.0))
         return None
 
+    # หางเรียวลงทางเดียวเสมอ: บังคับให้รัศมีไม่โตขึ้นเมื่อไล่จากโคนไปปลาย
+    #
+    # ช่วงที่หางลอดใต้ชายเสื้อหรือถูกขาบัง จะวัดได้บางกว่าความจริงมาก
+    # (วัดได้ 3 px ทั้งที่ท่อนถัดลงไปหนา 38 px) ถ้าไม่แก้ หางจะคอดเป็นคอขวด
+    # ตรงโคนแล้วหลุดออกจากตัว การไล่ค่าสูงสุดจากปลายขึ้นมาเติมช่วงที่ถูกบัง
+    # ด้วยความหนาของท่อนที่อยู่ถัดไป ซึ่งเป็นค่าที่ใกล้ความจริงที่สุดที่มี
+    best.half_w = np.maximum.accumulate(best.half_w[::-1])[::-1]
+
     # เกลาเส้นทางตามแนวตั้ง ขอบที่หยักจากการ segment จะกลายเป็นหางเป็นปุ่ม ๆ
     s = max(float(cfg.tail_path_smooth), 0.0)
     if s > 0 and len(best) > 5:
         best.cx = ndimage.gaussian_filter1d(best.cx, s, mode="nearest")
         best.half_w = ndimage.gaussian_filter1d(best.half_w, s, mode="nearest")
 
+    q = max(2, len(best) // 4)
     log.info("ลากหางจากภาพด้านหลังได้ %d แถว: %.0f%% -> %.0f%% ของความสูง, "
              "หนาโคน %.0f -> ปลาย %.0f px",
              len(best), 100 * (y1 - best.rows[0]) / H,
              100 * (y1 - best.rows[-1]) / H,
-             2 * best.half_w[0], 2 * best.half_w[-1])
+             2 * float(np.median(best.half_w[:q])),
+             2 * float(np.median(best.half_w[-q:])))
     return best

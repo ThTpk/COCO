@@ -107,6 +107,27 @@ def discover_views(input_dir: Path) -> dict[str, Path]:
                 log.info("มุม %-6s <- %s", view, path.name)
                 break
 
+    # บอกให้รู้ว่าไฟล์ไหนไม่ได้ถูกใช้ ไม่ใช่เงียบหายไปเฉย ๆ
+    #
+    # เคสที่เจอจริง: ผู้ใช้ใส่ up.jpeg (ภาพมุมบน) เข้ามาแล้วรอดูผล แต่ชื่อ
+    # ไม่ตรง alias ไหนเลย ไฟล์จึงถูกข้ามแบบไม่มีใครรู้ การเตือนตรงนี้ทำให้
+    # เห็นทันทีว่า pipeline ใช้กี่ภาพจริง ๆ
+    from .soleplan import SOLE_ALIASES
+
+    unused = []
+    for p in files:
+        if p in found.values():
+            continue
+        tokens = set(p.stem.lower().replace("-", "_").replace(" ", "_").split("_"))
+        if tokens & set(SOLE_ALIASES):
+            continue          # ภาพมุมล่าง ใช้เป็นผังฝ่าเท้า ไม่เข้า visual hull
+        unused.append(p.name)
+    if unused:
+        log.warning("ไฟล์ที่ไม่ได้ใช้ (ชื่อไม่ตรงมุมไหน): %s\n"
+                    "  มุมที่เข้า visual hull: front / back / side(left) / side_r(right)\n"
+                    "  ภาพเสริมที่ใช้ได้: down / sole / bottom (ผังฝ่าเท้า)",
+                    ", ".join(unused))
+
     missing = [v for v, spec in VIEWS.items() if spec.required and v not in found]
     if missing:
         raise ValueError(
@@ -169,6 +190,14 @@ def _mask_from_flat_background(
 
     mask = np.abs(rgb - bg).max(axis=2) > cfg.bg_tolerance
     if not 0.01 < float(mask.mean()) < 0.95:
+        return None
+
+    # ตัวละครในภาพ character sheet ไม่เคยกินความกว้างเต็มภาพ ถ้ากิน แปลว่า
+    # เราไปเหมาพื้น/ผนังที่สีต่างจากขอบภาพเข้ามาด้วย ซึ่งเจอบ่อยกับฉากที่มี
+    # พื้นกระเบื้องสว่างกว่าผนัง — ปฏิเสธไปใช้วิธีอื่นดีกว่าได้ mask ที่ผิด
+    ys, xs = np.where(mask)
+    if xs.size and (xs.max() - xs.min() + 1) > 0.92 * w:
+        log.debug("วิธีพื้นหลังสีพื้นได้ mask กว้างเกือบเต็มภาพ — น่าจะกินพื้นเข้ามา ข้าม")
         return None
     return mask
 
@@ -244,16 +273,48 @@ def _mask_from_rembg(rgba: np.ndarray, cfg: PipelineConfig) -> np.ndarray | None
     return out[:, :, 3] >= cfg.mask_threshold
 
 
+def fill_small_holes(mask: np.ndarray, max_frac: float) -> np.ndarray:
+    """ปิดเฉพาะรูที่เล็กกว่า `max_frac` ของพื้นที่ตัวละคร รูใหญ่ปล่อยไว้
+
+    `binary_fill_holes` เติมทุกรูที่ถูกล้อมรอบ ซึ่งผิดกับตัวละครที่มีหาง
+    ขดเป็นวง แขนเท้าสะเอว หรือปีกที่โค้งมาบรรจบตัว ช่องว่างกลางวงนั้นเป็น
+    *พื้นหลัง* จริง ๆ ถ้าเติมเข้าไป silhouette ด้านข้างจะกลายเป็นแผ่นตัน
+    แล้วความหนาของลำตัวที่อ่านได้จากมุมนั้นจะผิดไปทั้งช่วง
+    """
+    if max_frac <= 0:
+        return mask
+    filled = ndimage.binary_fill_holes(mask)
+    assert filled is not None
+    holes = filled & ~mask
+    if not holes.any():
+        return mask
+
+    labels, n = ndimage.label(holes)
+    if n == 0:
+        return mask
+    sizes = np.asarray(ndimage.sum(holes, labels, range(1, n + 1)))
+    limit = max_frac * float(mask.sum())
+    small = np.flatnonzero(sizes <= limit) + 1
+
+    out = mask.copy()
+    if small.size:
+        out |= np.isin(labels, small)
+    kept = int(n - small.size)
+    if kept:
+        log.debug("ไม่เติมรูใหญ่ %d รู (ช่องกลางวงหาง/ใต้แขน) รวม %.1f%% ของตัว",
+                  kept, 100 * sizes[sizes > limit].sum() / max(mask.sum(), 1))
+    return out
+
+
 def clean_mask(mask: np.ndarray, cfg: PipelineConfig) -> np.ndarray:
-    """ปิดรู ลบจุดรบกวน และเก็บเฉพาะก้อนที่ใหญ่ที่สุด"""
+    """ปิดรูเล็ก ลบจุดรบกวน และเก็บเฉพาะก้อนที่ใหญ่ที่สุด"""
     m = mask.astype(np.uint8)
     k = max(3, (min(mask.shape) // 250) | 1)  # บังคับให้เป็นเลขคี่
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
 
     m = cv2.morphologyEx(m, cv2.MORPH_OPEN, kernel)   # ลบ speckle
     m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, kernel)  # ปิดรูเล็ก
-    out = ndimage.binary_fill_holes(m.astype(bool))
-    assert out is not None
+    out = fill_small_holes(m.astype(bool), cfg.fill_hole_frac)
 
     if cfg.keep_largest_component:
         labels, n = ndimage.label(out)
@@ -265,14 +326,22 @@ def clean_mask(mask: np.ndarray, cfg: PipelineConfig) -> np.ndarray:
     return out
 
 
+SEGMENTERS = {
+    "alpha":   ("alpha channel", _mask_from_alpha),
+    "rembg":   ("rembg", _mask_from_rembg),
+    "grabcut": ("GrabCut", _mask_from_grabcut),
+    "flatbg":  ("พื้นหลังสีพื้น", _mask_from_flat_background),
+}
+
+
 def extract_mask(rgba: np.ndarray, cfg: PipelineConfig, view: str) -> np.ndarray:
-    """ลองแยกพื้นหลังจากวิธีที่ถูกที่สุดไปแพงที่สุด"""
-    for label, fn in (
-        ("alpha channel", _mask_from_alpha),
-        ("พื้นหลังสีพื้น", _mask_from_flat_background),
-        ("GrabCut", _mask_from_grabcut),
-        ("rembg", _mask_from_rembg),
-    ):
+    """ลองแยกพื้นหลังตามลำดับใน cfg.segment_order ใช้ตัวแรกที่สำเร็จ"""
+    for key in cfg.segment_order:
+        entry = SEGMENTERS.get(key)
+        if entry is None:
+            log.warning("ไม่รู้จักวิธีแยกพื้นหลัง '%s' — ข้าม", key)
+            continue
+        label, fn = entry
         mask = fn(rgba, cfg)
         if mask is not None:
             log.info("มุม %-6s segment ด้วย: %s", view, label)
@@ -300,28 +369,55 @@ def mask_bbox(mask: np.ndarray) -> BBox:
 
 
 def detect_side_facing(mask: np.ndarray, bbox: BBox) -> tuple[int, float]:
-    """เดาว่ามุมข้างหันหน้าไปทางไหน จากปลายเท้าที่ยื่นออกไปด้านหน้า
+    """เดาว่ามุมข้างหันหน้าไปทางไหน คืน (ทิศ, ความมั่นใจ) +1 = หันไปทางขวาของภาพ
 
-    ท่า A-pose ยืนตรง ปลายเท้าจะยื่นไปทางที่ตัวละครหันหน้าเสมอ
-    ซึ่งเป็นสัญญาณที่เชื่อถือได้มากกว่าใบหน้า (เพราะทรงผมด้านหลังมักหักล้างจมูก)
+    รวมสองสัญญาณที่เป็นอิสระต่อกัน แล้วให้โหวตกัน
+      * ปลายเท้า  — ท่ายืนตรง ปลายเท้าชี้ไปทางที่หันหน้าเสมอ
+      * หัว       — ช่วงบนสุดของตัว (กะโหลก + ปาก) ยื่นไปทางที่หันหน้า
+                    เทียบกับไหล่ ซึ่งเป็นจริงมากกับตัวละครปากยาวอย่างสัตว์เลื้อยคลาน
 
-    คืน (ทิศ, ความมั่นใจ) โดยทิศ +1 = หันไปทางขวาของภาพ
-    ความมั่นใจคือระยะเลื่อนของ centroid คิดเป็นสัดส่วนของความกว้างลำตัว
+    ใช้สองสัญญาณเพราะอันเดียวพลาดได้ง่าย: หางที่ลากถึงพื้นทำให้ช่วงเท้าเพี้ยน
+    ส่วนหัวจะเพี้ยนถ้าตัวละครมีผมยาว/หมวกยื่นไปข้างหลัง สองอันนี้พลาดคนละ
+    สถานการณ์กัน เอามารวมกันจึงแข็งแรงกว่าอันเดียวมาก
     """
     y0, y1, x0, x1 = bbox
     height = y1 - y0 + 1
-
-    feet = mask[max(y0, y1 - int(0.06 * height)) : y1 + 1]
-    torso = mask[y0 + int(0.25 * height) : y0 + int(0.65 * height)]
-    if feet.sum() == 0 or torso.sum() == 0:
+    if height < 10:
         return 0, 0.0
 
-    feet_cx = float(np.where(feet)[1].mean())
-    torso_cx = float(np.where(torso)[1].mean())
-    torso_w = max(1.0, float(torso.sum(axis=1).mean()))
+    def band(a: float, b: float) -> np.ndarray:
+        return mask[y0 + int(a * height) : y0 + int(b * height)]
 
-    shift = (feet_cx - torso_cx) / torso_w
-    return (1 if shift > 0 else -1), abs(shift)
+    torso = band(0.25, 0.60)
+    if torso.sum() == 0:
+        return 0, 0.0
+    torso_cx = float(np.where(torso)[1].mean())
+    torso_w = max(1.0, float(torso.sum(axis=1)[torso.sum(axis=1) > 0].mean()))
+
+    votes: list[float] = []
+
+    # ปลายเท้า: ใช้ *ช่วงกว้างตามแนวนอนของแถวล่างสุด* ไม่ใช่ centroid
+    # เพราะปลายหางที่แตะพื้นจะดึง centroid ไปอีกทาง
+    feet = band(0.94, 1.0)
+    if feet.sum() > 0:
+        fxs = np.where(feet)[1]
+        # ตัดก้อนที่ไกลจากลำตัวเกินหนึ่งช่วงตัวออก (นั่นคือปลายหาง)
+        near = fxs[np.abs(fxs - torso_cx) < 1.5 * torso_w]
+        if near.size > 20:
+            votes.append((float(near.mean()) - torso_cx) / torso_w)
+
+    # หัว: ช่วงบนสุด 12% ของตัว
+    head = band(0.0, 0.12)
+    if head.sum() > 0:
+        votes.append((float(np.where(head)[1].mean()) - torso_cx) / torso_w)
+
+    if not votes:
+        return 0, 0.0
+
+    shift = float(np.mean(votes))
+    # โหวตขัดกัน = ไม่มั่นใจ ลดคะแนนลงตามความต่าง
+    agree = 1.0 if len(votes) < 2 or votes[0] * votes[1] > 0 else 0.35
+    return (1 if shift > 0 else -1), abs(shift) * agree
 
 
 def normalize_view(
@@ -330,6 +426,7 @@ def normalize_view(
     spec: ViewSpec,
     cfg: PipelineConfig,
     source: Path,
+    extra_flip: bool = False,
 ) -> PreparedView:
     """ย่อ/ขยายให้ความสูงของ mask เท่ากันทุกมุม แล้ววางลง canvas จัตุรัส
 
@@ -363,17 +460,19 @@ def normalize_view(
     # วางให้ยอดหัวอยู่ที่แถว margin
     dy = margin - ny0
 
-    # จัดกลางแนวนอนด้วย centroid ของช่วงขา ไม่ใช่กึ่งกลาง bbox
+    # จัดกลางแนวนอนด้วย centroid ของ *ช่วงลำตัว* ไม่ใช่กึ่งกลาง bbox
     #
     # bbox โดนส่วนที่ยื่นออกมาลากไปง่ายมาก ตัวละครที่มีหาง ปีก ผมยาว หรืออาวุธ
-    # จะถูกเลื่อนไปคนละทิศในแต่ละมุม (หางชี้ขวาในมุมหน้า แต่ชี้ซ้ายในมุมข้าง)
-    # ทำให้สามมุมไม่ตรงแกนกันแล้ว hull เบี้ยว
-    # ช่วงขาเป็นจุดอ้างอิงที่นิ่งที่สุด เพราะอยู่กลางลำตัวเสมอในทุกมุม
-    leg_top = int(ny0 + 0.62 * (ny1 - ny0))
-    legs = mask_r[leg_top : ny1 + 1]
-    if legs.any():
-        center_x = float(np.where(legs)[1].mean())
-        anchor = "ช่วงขา"
+    # จะถูกเลื่อนไปคนละทิศในแต่ละมุม ทำให้ทุกมุมไม่ตรงแกนกันแล้ว hull เบี้ยว
+    #
+    # เคยใช้ช่วงขาเพราะคิดว่านิ่งกว่า แต่พอตัวละครมีหางยาวที่พาดลงมา *ทับขา*
+    # ในมุมหลังและมุมข้าง ช่วงขากลับกลายเป็นช่วงที่เพี้ยนที่สุด (วัดได้ว่า
+    # มุมหลังเลื่อนไป 25 พิกเซลจากมุมหน้า) ช่วงลำตัวอยู่เหนือโคนหางขึ้นไป
+    # จึงนิ่งกว่าในทุกมุม และใช้กฎเดียวกันได้หมดทั้งสี่มุม
+    band = mask_r[int(ny0 + 0.20 * (ny1 - ny0)) : int(ny0 + 0.60 * (ny1 - ny0))]
+    anchor = "ช่วงลำตัว"
+    if band.any():
+        center_x = float(np.where(band)[1].mean())
     else:
         center_x = float(np.where(mask_r)[1].mean())
         anchor = "ทั้งตัว"
@@ -400,10 +499,25 @@ def normalize_view(
 
     # พลิกซ้ายขวาให้แกนตรงกับมุม front
     flip = spec.flip_u
-    if spec.axis_u == "z" and facing < 0:
-        # ตัวละครหันไปทางซ้ายของภาพ แต่ระบบพิกัดคาดว่าหน้าอยู่ทาง +Z (ขวา)
+    if spec.axis_u == "z":
+        # มุมข้าง: เป้าหมายเดียวคือ "หน้าต้องชี้ไป +Z (ขวาของภาพ)" เสมอ
+        #
+        # ถ้าอ่านทิศจากภาพได้ ให้ใช้ค่านั้นตัดสินอย่างเดียว อย่าเอาไป *บวกเพิ่ม*
+        # กับ flip_u ของ spec เด็ดขาด: ภาพข้างสองใบจะได้การพลิกคนละแบบ
+        # (ใบหนึ่งหน้าชี้ +Z อีกใบชี้ -Z) แล้ว sd ที่เกิดจาก AND ของสองใบจะ
+        # เหลือแค่ส่วนที่ซ้อนกันของตัวกับเงากระจกของตัวเอง — ปากหายไปทั้งก้อน
+        # แล้วหัวออกมาเป็นกรวย
+        if facing != 0 and confidence >= 0.05:
+            flip = facing < 0
+            log.info("มุม %s: หันหน้าไปทาง%s -> %s เพื่อให้หน้าชี้ +Z",
+                     spec.name, "ขวา" if facing > 0 else "ซ้าย",
+                     "พลิกซ้ายขวา" if flip else "ไม่ต้องพลิก")
+        else:
+            log.warning("มุม %s: เดาทิศหันหน้าไม่ได้ ใช้ค่าตั้งต้นจากชื่อมุม "
+                        "(flip=%s) — ถ้าหน้าหลังสลับให้ใช้ --flip-side",
+                        spec.name, spec.flip_u)
+    if extra_flip:
         flip = not flip
-        log.info("มุม %s: พลิกซ้ายขวาอัตโนมัติ เพื่อให้หันหน้าไปทาง +Z", spec.name)
     if flip:
         canvas_rgb = canvas_rgb[:, ::-1].copy()
         canvas_mask = canvas_mask[:, ::-1].copy()
@@ -420,6 +534,87 @@ def normalize_view(
         src_size=(src_h, src_w),
         facing=facing,
     )
+
+
+# ---------------------------------------------------------------------------
+# ปรับ align ละเอียดด้วยการซ้อน silhouette
+# ---------------------------------------------------------------------------
+
+
+def _shift_view(view: PreparedView, dx: int, dy: int) -> None:
+    """เลื่อนภาพและ mask ของมุมหนึ่งในที่ (in place)"""
+    if dx == 0 and dy == 0:
+        return
+    view.rgb = np.roll(view.rgb, (dy, dx), axis=(0, 1))
+    view.mask = np.roll(view.mask, (dy, dx), axis=(0, 1))
+    # ล้างขอบที่ม้วนมาจากอีกฝั่ง
+    if dy > 0:
+        view.rgb[:dy] = 0; view.mask[:dy] = False
+    elif dy < 0:
+        view.rgb[dy:] = 0; view.mask[dy:] = False
+    if dx > 0:
+        view.rgb[:, :dx] = 0; view.mask[:, :dx] = False
+    elif dx < 0:
+        view.rgb[:, dx:] = 0; view.mask[:, dx:] = False
+
+
+def _best_offset(
+    ref: np.ndarray, mov: np.ndarray, limit: int, step: int = 2
+) -> tuple[int, int, float, float]:
+    """หา (dx, dy) ที่ทำให้ `mov` ซ้อนทับ `ref` ได้ดีที่สุด (วัดด้วย IoU)
+
+    ค้นแบบหยาบก่อนแล้วค่อยละเอียดรอบจุดที่ดีที่สุด เพราะ IoU ของ silhouette
+    เป็นฟังก์ชันที่เรียบมากในช่วงใกล้จุดเหมาะสม
+    """
+    base = float((ref & mov).sum() / max((ref | mov).sum(), 1))
+
+    def score(dx: int, dy: int) -> float:
+        m = np.roll(mov, (dy, dx), axis=(0, 1))
+        return float((ref & m).sum() / max((ref | m).sum(), 1))
+
+    best = (0, 0, base)
+    for coarse in (step * 4, step):
+        cx, cy, cs = best
+        rng = limit if coarse > step else coarse * 4
+        for dy in range(cy - rng, cy + rng + 1, coarse):
+            for dx in range(cx - rng, cx + rng + 1, coarse):
+                s = score(dx, dy)
+                if s > cs:
+                    cx, cy, cs = dx, dy, s
+        best = (cx, cy, cs)
+    return best[0], best[1], best[2], base
+
+
+def refine_alignment(views: dict[str, PreparedView], cfg: PipelineConfig) -> list[str]:
+    """เลื่อนมุมคู่ให้ silhouette ซ้อนกันพอดีที่สุด
+
+    การจัดกลางด้วย centroid เป็นการเดาจาก *มุมเดียว* ส่วนขั้นนี้ใช้ข้อมูลที่
+    ตรงกับสิ่งที่ต้องการจริง ๆ: มุมหน้ากับมุมหลังมองแกน X เดียวกัน ภาพข้าง
+    สองใบมองแกน Z เดียวกัน หลัง align แล้ว silhouette ของคู่นั้นจึงต้องทับกัน
+    เลื่อนให้ทับกันมากที่สุดคือคำตอบที่ถูกตามนิยาม ไม่ใช่การเดาอีกต่อไป
+
+    ใช้คู่ (front, back) และ (side, side_r) โดยยึดตัวแรกเป็นหลัก
+    """
+    notes: list[str] = []
+    limit = max(4, int(0.06 * cfg.canvas))
+
+    for ref_name, mov_name in (("front", "back"), ("side", "side_r")):
+        ref, mov = views.get(ref_name), views.get(mov_name)
+        if ref is None or mov is None:
+            continue
+        dx, dy, iou, base = _best_offset(ref.mask, mov.mask, limit)
+        if dx == 0 and dy == 0:
+            continue
+        _shift_view(mov, dx, dy)
+        log.info("จูน align มุม %s เทียบ %s: เลื่อน (%+d, %+d) px -> IoU %.3f (เดิม %.3f)",
+                 mov_name, ref_name, dx, dy, iou, base)
+        if abs(dx) >= limit or abs(dy) >= limit:
+            notes.append(
+                f"มุม {mov_name} ต้องเลื่อนถึง ({dx:+d}, {dy:+d}) px จึงจะทับ "
+                f"{ref_name} ได้ดีที่สุด ซึ่งชนเพดานที่ตั้งไว้ — "
+                "สองภาพนี้อาจถ่าย/วาดคนละระยะกล้อง"
+            )
+    return notes
 
 
 # ---------------------------------------------------------------------------
@@ -471,6 +666,29 @@ def check_consistency(views: dict[str, PreparedView]) -> list[str]:
                 f"มุมข้าง: ความมั่นใจเรื่องทิศการหันหน้าต่ำ ({conf:.2f}) "
                 "ตรวจภาพ debug/02_aligned.png ว่าหันหน้าไปทางขวาหรือไม่ "
                 "ถ้าไม่ ให้ใช้ flag --flip-side"
+            )
+
+    # ภาพข้างสองใบมอง *แกนเดียวกัน* จากคนละฝั่ง หลัง align แล้ว silhouette
+    # ของทั้งคู่ควรทับกันเกือบสนิท ถ้าไม่ แปลว่ามีใบหนึ่งพลิกผิดทาง จัดกลางผิด
+    # หรือท่าทางไม่ตรงกัน ซึ่งทั้งสามกรณีทำให้ sd ที่ได้จากการ AND ผิดหมด
+    sl, sr = views.get("side"), views.get("side_r")
+    if sl and sr:
+        inter = float((sl.mask & sr.mask).sum())
+        union = float((sl.mask | sr.mask).sum())
+        iou = inter / max(union, 1.0)
+        flipped = float((sl.mask & sr.mask[:, ::-1]).sum()) / max(union, 1.0)
+        if flipped > iou + 0.08:
+            issues.append(
+                f"มุม side กับ side_r ทับกันดีกว่าเมื่อพลิกใบหนึ่ง "
+                f"({flipped:.2f} เทียบกับ {iou:.2f}) — สองใบนี้หันหน้าคนละทาง "
+                "ความลึกที่ได้จากการตัดกันจะผิดทั้งตัว ลองใช้ --flip-side "
+                "หรือดู debug/02_aligned.png"
+            )
+        elif iou < 0.82:
+            issues.append(
+                f"มุม side กับ side_r ทับกันแค่ {iou:.2f} (ควร > 0.82) — "
+                "ท่าทางหรือสัดส่วนในสองภาพไม่ตรงกัน ความหนาของตัวจะถูกเฉือน "
+                "ไปเท่าส่วนที่ไม่ทับกัน"
             )
 
     for name, v in views.items():
@@ -537,12 +755,13 @@ def prepare_views(
         rgba = load_rgba(path)
         mask = extract_mask(rgba, cfg, name)
         spec = VIEWS[name]
-        if flip_side and spec.axis_u == "z":
-            spec = ViewSpec(spec.name, spec.axis_u, not spec.flip_u,
-                            spec.depth_axis, spec.required)
-        views[name] = normalize_view(rgba, mask, spec, cfg, path)
+        # --flip-side พลิก *ผลลัพธ์สุดท้าย* ของทุกมุมข้าง ไม่ใช่ค่า flip_u ของ spec
+        # เพราะการเดาทิศจากภาพจะทับค่า flip_u ไปแล้ว การแก้ที่ spec จึงไม่มีผล
+        views[name] = normalize_view(rgba, mask, spec, cfg, path,
+                                     extra_flip=flip_side and spec.axis_u == "z")
 
-    issues = check_consistency(views)
+    issues = refine_alignment(views, cfg)
+    issues += check_consistency(views)
     for msg in issues:
         log.warning("ความสอดคล้องระหว่างมุม: %s", msg)
 
