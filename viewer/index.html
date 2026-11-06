@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>2Dto3D — ดูโมเดล</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #0d0f12; color: #e8eaed;
+         font: 14px/1.5 "Segoe UI", system-ui, sans-serif; overflow: hidden; }
+  #app { position: fixed; inset: 0; }
+  #panel { position: fixed; top: 16px; left: 16px; width: 260px; padding: 16px;
+           background: #171a1fdd; border: 1px solid #2a2f37; border-radius: 10px;
+           backdrop-filter: blur(8px); }
+  h1 { margin: 0 0 4px; font-size: 15px; letter-spacing: .3px; }
+  .sub { margin: 0 0 14px; font-size: 12px; color: #8b94a3; }
+  .row { display: flex; align-items: center; gap: 8px; margin: 7px 0; }
+  .row label { flex: 1; font-size: 13px; color: #c3cad4; }
+  select, button { background: #222730; color: #e8eaed; border: 1px solid #343b46;
+                   border-radius: 6px; padding: 5px 9px; font-size: 13px; cursor: pointer; }
+  button:hover, select:hover { background: #2a303a; }
+  input[type=range] { flex: 1; accent-color: #4da3ff; }
+  #stats { margin-top: 14px; padding-top: 12px; border-top: 1px solid #2a2f37;
+           font-size: 12px; color: #8b94a3; white-space: pre-line; }
+  #drop { position: fixed; inset: 0; display: none; place-items: center;
+          background: #4da3ff22; border: 3px dashed #4da3ff; font-size: 20px; }
+  #drop.on { display: grid; }
+  #err { position: fixed; bottom: 16px; left: 16px; right: 16px; max-width: 760px;
+         margin: auto; padding: 12px 14px; border-radius: 8px; display: none;
+         background: #3a1d1d; border: 1px solid #6b2b2b; color: #ffb4b4; font-size: 13px; }
+</style>
+<script type="importmap">
+{ "imports": {
+    "three": "https://unpkg.com/three@0.169.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.169.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="app"></div>
+
+<div id="panel">
+  <h1>2Dto3D</h1>
+  <p class="sub">ลากไฟล์ .glb มาวางเพื่อเปิดดู</p>
+
+  <div class="row"><label for="file">เปิดไฟล์</label>
+    <input id="file" type="file" accept=".glb,.gltf" hidden>
+    <button onclick="document.getElementById('file').click()">เลือก…</button></div>
+
+  <div class="row"><label>มุมมอง</label>
+    <button id="vF" title="กด 1">หน้า</button>
+    <button id="vS" title="กด 2">ข้าง</button>
+    <button id="vB" title="กด 3">หลัง</button></div>
+
+  <div class="row"><label for="head">ซูมหัว</label>
+    <input id="head" type="checkbox"></div>
+
+  <div class="row"><label for="anim">อนิเมชัน</label>
+    <select id="anim"><option value="-1">— ไม่มี —</option></select></div>
+
+  <div class="row"><label for="speed">ความเร็ว</label>
+    <input id="speed" type="range" min="0" max="2" step="0.05" value="1"></div>
+
+  <div class="row"><label for="wire">เส้นโครง</label>
+    <input id="wire" type="checkbox"></div>
+
+  <div class="row"><label for="bones">โครงกระดูก</label>
+    <input id="bones" type="checkbox"></div>
+
+  <div class="row"><label for="vcol">สี vertex</label>
+    <input id="vcol" type="checkbox" checked></div>
+
+  <div class="row"><label for="clay">รูปทรงล้วน</label>
+    <input id="clay" type="checkbox"></div>
+
+  <div id="stats">ยังไม่ได้โหลดโมเดล</div>
+</div>
+
+<div id="drop">วางไฟล์ .glb ที่นี่</div>
+<div id="err"></div>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { GLTFLoader }    from 'three/addons/loaders/GLTFLoader.js';
+import { DRACOLoader }  from 'three/addons/loaders/DRACOLoader.js';
+
+const $ = id => document.getElementById(id);
+const err = msg => { const e = $('err'); e.textContent = msg; e.style.display = 'block'; };
+
+// ---- ฉาก ----------------------------------------------------------------
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+// ACES กดโทนกลางลงมาก ถ้าไม่ชดเชย exposure โมเดลจะดูมืดกว่าที่ texture เป็นจริง
+renderer.toneMappingExposure = 1.6;
+$('app').appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0d0f12);
+scene.fog = new THREE.Fog(0x0d0f12, 8, 26);
+
+const camera = new THREE.PerspectiveCamera(40, innerWidth / innerHeight, 0.01, 200);
+camera.position.set(2.4, 1.6, 3.4);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.target.set(0, 1, 0);
+
+scene.add(new THREE.HemisphereLight(0xbcd6ff, 0x3a3228, 2.4));
+// ไฟเติมจากด้านหน้า ไม่ให้ส่วนที่หันเข้าหากล้องจมอยู่ในเงาตัวเอง
+const fill = new THREE.DirectionalLight(0xffeedd, 0.9);
+fill.position.set(0, 2, 6);
+scene.add(fill);
+const key = new THREE.DirectionalLight(0xffffff, 2.2);
+key.position.set(3, 6, 4);
+key.castShadow = true;
+key.shadow.mapSize.set(2048, 2048);
+Object.assign(key.shadow.camera, { left: -4, right: 4, top: 6, bottom: -1, far: 24 });
+scene.add(key);
+const rim = new THREE.DirectionalLight(0x88bbff, 1.0);
+rim.position.set(-4, 3, -4);
+scene.add(rim);
+
+const ground = new THREE.Mesh(
+  new THREE.CircleGeometry(14, 64).rotateX(-Math.PI / 2),
+  new THREE.MeshStandardMaterial({ color: 0x14171c, roughness: 0.95 })
+);
+ground.receiveShadow = true;
+scene.add(ground);
+scene.add(new THREE.GridHelper(14, 28, 0x2c333d, 0x1c2128));
+
+// ---- สถานะโมเดล ---------------------------------------------------------
+let model = null, mixer = null, action = null, skeletonHelper = null;
+const clock = new THREE.Clock();
+const loader = new GLTFLoader();
+// ไฟล์ที่บีบด้วย Draco ต้องมี decoder ไม่งั้นโหลดไม่ขึ้นเลย
+const dracoLoader = new DRACOLoader();
+dracoLoader.setDecoderPath('https://unpkg.com/three@0.169.0/examples/jsm/libs/draco/');
+loader.setDRACOLoader(dracoLoader);
+
+function clearModel() {
+  for (const obj of [model, skeletonHelper]) if (obj) scene.remove(obj);
+  model = skeletonHelper = null;
+  mixer = action = null;
+  $('anim').innerHTML = '<option value="-1">— ไม่มี —</option>';
+}
+
+function frameModel(obj) {
+  const box = new THREE.Box3().setFromObject(obj);
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+  const h = Math.max(size.y, 0.001);
+
+  controls.target.set(center.x, center.y, center.z);
+  const dist = h * 2.2;
+  camera.position.set(center.x + dist * 0.55, center.y + h * 0.15, center.z + dist);
+  camera.near = h / 100;
+  camera.far = h * 60;
+  camera.updateProjectionMatrix();
+  controls.update();
+
+  scene.fog.near = dist;
+  scene.fog.far = dist * 5;
+  return { size, box };
+}
+
+function describe(gltf, size) {
+  let verts = 0, tris = 0, meshes = 0, skinned = 0;
+  model.traverse(o => {
+    if (!o.isMesh) return;
+    meshes++;
+    if (o.isSkinnedMesh) skinned++;
+    const g = o.geometry;
+    verts += g.attributes.position.count;
+    tris += (g.index ? g.index.count : g.attributes.position.count) / 3;
+  });
+  $('stats').textContent =
+    `vertex   ${verts.toLocaleString()}\n` +
+    `triangle ${Math.round(tris).toLocaleString()}\n` +
+    `mesh     ${meshes} (skinned ${skinned})\n` +
+    `ขนาด      ${size.x.toFixed(2)} x ${size.y.toFixed(2)} x ${size.z.toFixed(2)} m\n` +
+    `อนิเมชัน  ${gltf.animations.length}`;
+}
+
+function onLoaded(gltf) {
+  clearModel();
+  model = gltf.scene;
+  model.traverse(o => {
+    if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; }
+  });
+  scene.add(model);
+
+  const { size } = frameModel(model);
+  describe(gltf, size);
+
+  if (gltf.animations.length) {
+    mixer = new THREE.AnimationMixer(model);
+    const sel = $('anim');
+    gltf.animations.forEach((clip, i) => {
+      sel.add(new Option(clip.name || `clip ${i}`, String(i)));
+    });
+    sel.value = '0';
+    playClip(gltf, 0);
+    sel.onchange = () => playClip(gltf, +sel.value);
+  }
+
+  skeletonHelper = new THREE.SkeletonHelper(model);
+  skeletonHelper.visible = $('bones').checked;
+  scene.add(skeletonHelper);
+
+  applyWire();
+  applyVcol();
+}
+
+function playClip(gltf, i) {
+  if (!mixer) return;
+  if (action) action.fadeOut(0.2);
+  if (i < 0) { action = null; return; }
+  action = mixer.clipAction(gltf.animations[i]);
+  action.reset().fadeIn(0.2).play();
+}
+
+function load(url, revoke = false) {
+  loader.load(url, g => { onLoaded(g); if (revoke) URL.revokeObjectURL(url); },
+    undefined,
+    e => err(`โหลดไม่สำเร็จ: ${e.message || e}\n` +
+             `ถ้าเปิดหน้านี้ด้วย file:// ให้รัน server แทน:\n` +
+             `  .venv\\Scripts\\python.exe -m http.server 8000`));
+}
+
+// ---- ปุ่มควบคุม ---------------------------------------------------------
+const applyWire = () => model?.traverse(o => {
+  if (o.isMesh) o.material.wireframe = $('wire').checked;
+});
+// เปิด vertexColors ได้เฉพาะเมื่อ geometry มี attribute สีจริง ๆ
+// โมเดลที่ใช้ UV texture จะไม่มี COLOR_0 มาด้วย (ใส่ทั้งคู่ใน glTF จะถูกคูณกัน
+// แล้วภาพมืดลงสองเท่า) ถ้าสั่งเปิดทั้งที่ไม่มี three.js จะเรนเดอร์เป็นสีดำ
+const applyVcol = () => model?.traverse(o => {
+  if (!o.isMesh) return;
+  const has = !!o.geometry.attributes.color;
+  o.material.vertexColors = has && $('vcol').checked;
+  o.material.needsUpdate = true;
+});
+
+// มุมมองมาตรฐาน — ทำให้ตรวจผลซ้ำได้จากมุมเดิมทุกครั้ง
+// +Z คือทิศที่ตัวละครหันหน้า ตามระบบพิกัดของ pipeline
+const DIRS = { front: [0, 0, 1], side: [1, 0, 0], back: [0, 0, -1] };
+
+function setView(name) {
+  if (!model) return;
+  const box = new THREE.Box3().setFromObject(model);
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+  const h = Math.max(size.y, 0.001);
+
+  const onlyHead = $('head').checked;
+  const target = onlyHead
+    ? new THREE.Vector3(center.x, box.max.y - h * 0.08, center.z)
+    : center;
+  const dist = onlyHead ? h * 0.85 : h * 2.0;
+
+  const d = DIRS[name];
+  camera.position.set(target.x + d[0] * dist, target.y + (onlyHead ? 0 : h * 0.1),
+                      target.z + d[2] * dist);
+  camera.near = h / 200;
+  camera.far = h * 60;
+  camera.updateProjectionMatrix();
+  controls.target.copy(target);
+  controls.update();
+}
+
+$('vF').onclick = () => setView('front');
+$('vS').onclick = () => setView('side');
+$('vB').onclick = () => setView('back');
+$('head').onchange = () => setView('side');
+addEventListener('keydown', e => {
+  const k = { '1': 'front', '2': 'side', '3': 'back' }[e.key];
+  if (k) setView(k);
+});
+
+// โหมดรูปทรงล้วน: เปลี่ยนเป็นวัสดุสีเดียวด้าน ๆ เพื่อดูเฉพาะเรขาคณิต
+// จำเป็นเวลาตัดสินว่า "ตรงนี้แบน" เป็นปัญหาของรูปทรง หรือแค่ texture/เงาหลอกตา
+const clayMat = new THREE.MeshStandardMaterial({
+  color: 0xb8b2a8, roughness: 0.75, metalness: 0.0,
+});
+const applyClay = () => model?.traverse(o => {
+  if (!o.isMesh) return;
+  if (!o.userData.origMat) o.userData.origMat = o.material;
+  o.material = $('clay').checked ? clayMat : o.userData.origMat;
+  applyWire();
+});
+$('clay').onchange  = applyClay;
+$('wire').onchange  = applyWire;
+$('vcol').onchange  = applyVcol;
+$('bones').onchange = () => { if (skeletonHelper) skeletonHelper.visible = $('bones').checked; };
+$('speed').oninput  = () => { if (mixer) mixer.timeScale = +$('speed').value; };
+$('file').onchange  = e => {
+  const f = e.target.files[0];
+  if (f) load(URL.createObjectURL(f), true);
+};
+
+// ลากไฟล์มาวาง
+const drop = $('drop');
+addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('on'); });
+addEventListener('dragleave', () => drop.classList.remove('on'));
+addEventListener('drop', e => {
+  e.preventDefault();
+  drop.classList.remove('on');
+  const f = e.dataTransfer.files[0];
+  if (f) load(URL.createObjectURL(f), true);
+});
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+// ---- ลูป ----------------------------------------------------------------
+renderer.setAnimationLoop(() => {
+  const dt = clock.getDelta();
+  mixer?.update(dt);
+  controls.update();
+  renderer.render(scene, camera);
+});
+
+// โหลดไฟล์จาก ?model=... หรือไม่ก็ผลลัพธ์ล่าสุด (เงียบ ๆ ถ้ายังไม่มีไฟล์)
+const wanted = new URLSearchParams(location.search).get('model')
+             || '../output/character.glb';
+fetch(wanted, { method: 'HEAD' })
+  .then(r => { if (r.ok) load(wanted); })
+  .catch(() => {});
+</script>
+</body>
+</html>

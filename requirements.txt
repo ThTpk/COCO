@@ -1,0 +1,20 @@
+# ---------------------------------------------------------------------------
+# torch / torchvision ไม่อยู่ในไฟล์นี้ เพราะต้องลงจาก index ของ CUDA
+#   .venv/Scripts/python.exe -m pip install torch==2.11.0 torchvision==0.26.0 \
+#       --index-url https://download.pytorch.org/whl/cu128
+# ---------------------------------------------------------------------------
+
+numpy>=2.0
+scipy>=1.14
+opencv-python>=4.10
+scikit-image>=0.24
+open3d>=0.19
+trimesh>=4.5
+xatlas>=0.0.11        # คลี่ผิวเป็น UV atlas
+pygltflib>=1.16
+pillow>=11.0
+tqdm>=4.66
+
+# --- optional: ใช้เมื่อภาพพื้นหลังไม่ได้เป็นสีพื้นและไม่มี alpha ---
+# rembg>=2.0.60
+# onnxruntime-gpu>=1.20
