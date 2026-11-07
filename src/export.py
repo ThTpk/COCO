@@ -21,6 +21,7 @@ def build_trimesh(
     verts_world: np.ndarray,
     mesh: MeshData,
     texture: np.ndarray | None = None,
+    normal: np.ndarray | None = None,
 ) -> trimesh.Trimesh:
     """ประกอบเป็น trimesh พร้อมสี — ใช้ texture ถ้ามี ไม่งั้นใช้ vertex color
 
@@ -43,12 +44,23 @@ def build_trimesh(
         # ถ้าลืมข้อนี้ อาการที่ได้คือ texture ติดครบแต่แมปผิดที่เป็นหย่อม ๆ
         # (หน้าอกกลายเป็นผ้ายีนส์) ไม่ใช่ภาพกลับหัวทั้งใบอย่างที่คาด เพราะแต่ละ
         # island ไปตกบนบริเวณอื่นของ atlas คนละที่กัน
+        extra = {}
+        roughness = 0.85
+        if normal is not None:
+            # normal map ต้องพลิกแกน V ให้ตรงกับ baseColor เพราะใช้ UV ชุดเดียวกัน
+            extra["normalTexture"] = Image.fromarray(
+                np.ascontiguousarray(normal[::-1]))
+            # ผิวที่ด้านสนิทสะท้อนแสงเท่ากันทุกทิศ การบิด normal จึงแทบไม่
+            # เปลี่ยนอะไรเลย ต้องเหลือความมันไว้บ้าง ร่องเกล็ดกับรอยยับผ้า
+            # ถึงจะมีไฮไลต์วิ่งให้เห็นว่าผิวไม่ได้เรียบ
+            roughness = 0.7
         material = trimesh.visual.material.PBRMaterial(
             name="character",
             baseColorTexture=Image.fromarray(
                 np.ascontiguousarray(texture[::-1])),
             metallicFactor=0.0,
-            roughnessFactor=0.85,
+            roughnessFactor=roughness,
+            **extra,
         )
         kwargs["visual"] = trimesh.visual.TextureVisuals(
             uv=np.asarray(mesh.uv, np.float32),
@@ -77,10 +89,11 @@ def export(
     name: str = "character",
     formats: tuple[str, ...] = ("glb",),
     texture: np.ndarray | None = None,
+    normal: np.ndarray | None = None,
 ) -> dict[str, Path]:
     """เขียนไฟล์ตามฟอร์แมตที่ขอ คืน dict ของ {ฟอร์แมต: path}"""
     out_dir.mkdir(parents=True, exist_ok=True)
-    tm = build_trimesh(verts_world, mesh, texture)
+    tm = build_trimesh(verts_world, mesh, texture, normal)
 
     # บังคับให้คำนวณ vertex normal ไว้ก่อน แล้วสั่ง exporter ให้เขียนลงไฟล์ด้วย
     #
@@ -128,8 +141,16 @@ def recompress_textures(path: Path, quality: int, max_size: int = 0) -> dict:
         off = bv.byteOffset or 0
         views.append(bytearray(blob[off : off + bv.byteLength]))
 
+    # normal map เก็บ *ทิศทาง* ไว้ในค่าสี ไม่ใช่ภาพให้คนดู artifact ของ JPEG
+    # จึงโผล่เป็นคลื่นบนผิวตอนโดนแสง — บีบได้ แต่ต้องคุณภาพสูงกว่าภาพสีปกติ
+    # (เก็บเป็น PNG ไปเลยก็ได้ แต่ 2048x2048 กิน 6 MB ซึ่งหนักเกินไปสำหรับเว็บ)
+    keep = set()
+    for m in g.materials or []:
+        if m.normalTexture is not None and m.normalTexture.index is not None:
+            keep.add(g.textures[m.normalTexture.index].source)
+
     changed = 0
-    for im in g.images:
+    for i, im in enumerate(g.images):
         if im.bufferView is None:
             continue
         raw = bytes(views[im.bufferView])
@@ -138,8 +159,9 @@ def recompress_textures(path: Path, quality: int, max_size: int = 0) -> dict:
             img = img.resize((max_size, max_size), Image.LANCZOS)
 
         buf = io.BytesIO()
-        img.save(buf, format="JPEG", quality=quality, optimize=True,
-                 progressive=True, subsampling=0)
+        img.save(buf, format="JPEG",
+                 quality=min(97, quality + 12) if i in keep else quality,
+                 optimize=True, progressive=True, subsampling=0)
         new = buf.getvalue()
         if len(new) >= len(raw):
             continue                      # บีบแล้วไม่เล็กลง ก็ไม่ต้องเปลี่ยน

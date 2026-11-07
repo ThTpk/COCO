@@ -91,6 +91,9 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--texture-blend", type=float, default=6.0,
                    help="ยิ่งมากยิ่งคม: 0 = เฉลี่ยสองมุมที่ดีที่สุดเท่า ๆ กัน, "
                         "สูง = ใช้มุมที่ดีที่สุดมุมเดียวเกือบตลอด")
+    g.add_argument("--normal-strength", type=float, default=1.0,
+                   help="ความแรงของ normal map ที่สร้างจากลายบน texture "
+                        "(0 = ไม่ต้องสร้าง) สูงเกินผิวจะดูเป็นรอยบุบ")
     g.add_argument("--no-occlusion", action="store_true",
                    help="ไม่ต้องตรวจว่าจุดบนผิวถูกแขน/หางบังในมุมนั้นหรือไม่")
     g.add_argument("--rig", choices=["none", "blender"], default="none")
@@ -182,19 +185,22 @@ def run_hull(a, cfg, frames, sol, out_dir: Path) -> int:
     tex_pick = _even_angles(sol.cams, max(a.texture_views, a.views))
     TF = [frames[i] for i in tex_pick]
     TC = [sol.cams[i] for i in tex_pick]
-    tex_img = None
+    tex_img = nrm_img = None
     if cfg.texture_mode == "uv":
         mesh = uvmap.unwrap(mesh, cfg)
-        tex_img = cliptexture.bake(mesh, grid, axes, TF, TC, cfg,
-                                   blend=a.texture_blend,
-                                   occlusion=not a.no_occlusion)
+        tex_img, nrm_img = cliptexture.bake(
+            mesh, grid, axes, TF, TC, cfg, blend=a.texture_blend,
+            occlusion=not a.no_occlusion, normal_strength=a.normal_strength)
         import cv2
-        tex_path = out_dir / f"{a.name}_texture.png"
-        ok, buf = cv2.imencode(".png", tex_img[:, :, ::-1])
-        if ok:
-            buf.tofile(str(tex_path))
-            log.info("เขียน texture -> %s (%.2f MB)", tex_path,
-                     tex_path.stat().st_size / 1e6)
+        for img, suffix in ((tex_img, "texture"), (nrm_img, "normal")):
+            if img is None:
+                continue
+            path = out_dir / f"{a.name}_{suffix}.png"
+            ok, buf = cv2.imencode(".png", img[:, :, ::-1])
+            if ok:
+                buf.tofile(str(path))
+                log.info("เขียน %-7s -> %s (%.2f MB)", suffix, path,
+                         path.stat().st_size / 1e6)
     else:
         mesh = cliptexture.vertex_colors(mesh, grid, axes, TF, TC, cfg,
                                          blend=a.texture_blend,
@@ -214,7 +220,8 @@ def run_hull(a, cfg, frames, sol, out_dir: Path) -> int:
                                        out_dir / f"{a.name}_joints.json")
 
     written = export_mod.export(verts_world, mesh, out_dir, a.name,
-                                cfg.export_formats, texture=tex_img)
+                                cfg.export_formats, texture=tex_img,
+                                normal=nrm_img)
     if cfg.texture_quality > 0:
         for p in written.values():
             if p.suffix.lower() == ".glb":

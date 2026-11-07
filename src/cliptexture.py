@@ -209,8 +209,9 @@ def _voxel_to_world(points_vox: np.ndarray, grid: HullGrid,
 
 def bake(mesh: MeshData, grid: HullGrid, axes: tuple, frames: list[ClipFrame],
          cams: list[Camera], cfg: PipelineConfig, blend: float = 6.0,
-         occlusion: bool = True) -> np.ndarray:
-    """คลี่ผิวแล้ว bake สีจากคลิปลง texture — คืนภาพ RGB uint8"""
+         occlusion: bool = True, normal_strength: float = 0.0,
+         ) -> tuple[np.ndarray, np.ndarray | None]:
+    """คลี่ผิวแล้ว bake สีจากคลิปลง texture — คืน (ภาพสี, normal map หรือ None)"""
     from .uvmap import _rasterize, pad_islands
 
     size = int(cfg.uv_texture_size)
@@ -227,10 +228,62 @@ def bake(mesh: MeshData, grid: HullGrid, axes: tuple, frames: list[ClipFrame],
 
     img = np.zeros((size * size, 3), np.uint8)
     img[idx] = colors
-    img = pad_islands(img.reshape(size, size, 3),
-                      filled.reshape(size, size), cfg.uv_padding)
+    mask2d = filled.reshape(size, size)
+    img = pad_islands(img.reshape(size, size, 3), mask2d, cfg.uv_padding)
     log.info("bake texture %dx%d เสร็จ", size, size)
-    return img
+
+    nrm = None
+    if normal_strength > 0:
+        nrm = normal_map(img, mask2d, normal_strength)
+    return img, nrm
+
+
+def normal_map(texture: np.ndarray, filled: np.ndarray, strength: float = 1.0,
+               sigma: float = 4.0, flip_green: bool = False) -> np.ndarray:
+    """สร้าง normal map จากลายบน texture ที่ bake ไว้แล้ว
+
+    ทำไมถึงพอได้ด้วยวิธีนี้: hull ให้ผิวที่เรียบเกินจริง เกล็ด ตะเข็บ หัวเข็มขัด
+    ไม่มีอยู่ในรูปทรงเลย แต่ *มีอยู่ในลาย* เพราะภาพต้นฉบับวาดแสงเงาของมันมาแล้ว
+    ความสว่างความถี่สูงบนลายจึงเป็นตัวแทนของความสูงผิวที่ใช้ได้ดีพอสมควร
+
+    ขั้นตอน
+      1. แยกเฉพาะความถี่สูงของความสว่าง (ลบตัวเองที่เบลอแล้วออก) — ทิ้งแสงเงา
+         ของทั้งก้อนกับความต่างของสีเนื้อ/ผ้า ซึ่งไม่ใช่ความขรุขระ
+      2. ปรับสเกลด้วยค่ามัธยฐานสัมบูรณ์ ให้ `strength` มีความหมายเท่ากันไม่ว่า
+         ภาพจะคอนทราสต์แค่ไหน
+      3. หาความชันสองแกนแล้วแปลงเป็นเวกเตอร์ตั้งฉาก
+
+    ข้อจำกัดที่ต้องรู้: นี่คือ *การเดาความสูงจากความสว่าง* ไม่ใช่การวัดผิวจริง
+    ตรงที่ภาพต้นฉบับมีเงาตกกระทบแรง ๆ มันจะอ่านเงานั้นเป็นหลุมด้วย การตั้ง
+    strength สูงเกินจึงทำให้ผิวดูเป็นรอยบุบแทนที่จะเป็นเกล็ด
+    """
+    from .uvmap import pad_islands
+
+    lum = (0.299 * texture[:, :, 0] + 0.587 * texture[:, :, 1]
+           + 0.114 * texture[:, :, 2]).astype(np.float32)
+    detail = lum - cv2.GaussianBlur(lum, (0, 0), sigma)
+
+    inside = detail[filled]
+    spread = 1.4826 * float(np.median(np.abs(inside))) if inside.size else 1.0
+    h = np.clip(detail / max(3.0 * spread, 1e-3), -1.0, 1.0) * (0.5 * strength)
+
+    # ขยายค่าออกนอกขอบ island ก่อนหาความชัน ไม่งั้นรอยต่อระหว่าง island
+    # (ซึ่งเป็นสีคนละที่กันของตัวละคร) จะกลายเป็นสันคมพาดทั่วตัว
+    packed = np.clip(h * 127.0 + 128.0, 0, 255).astype(np.uint8)
+    packed = pad_islands(np.dstack([packed] * 3), filled, 8)[:, :, 0]
+    h = (packed.astype(np.float32) - 128.0) / 127.0
+
+    gx = cv2.Scharr(h, cv2.CV_32F, 1, 0) / 16.0
+    gy = cv2.Scharr(h, cv2.CV_32F, 0, 1) / 16.0
+    nz = np.ones_like(gx)
+    vec = np.dstack([-gx, gy if not flip_green else -gy, nz])
+    vec /= np.linalg.norm(vec, axis=2, keepdims=True)
+
+    out = np.clip(vec * 127.5 + 127.5, 0, 255).astype(np.uint8)
+    log.info("สร้าง normal map %dx%d (strength %.2f, ความชันสูงสุด %.2f)",
+             out.shape[1], out.shape[0], strength,
+             float(np.abs(np.dstack([gx, gy])).max()))
+    return out
 
 
 def vertex_colors(mesh: MeshData, grid: HullGrid, axes: tuple,
