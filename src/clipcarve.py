@@ -276,14 +276,42 @@ def carve_sdf(frames: list[ClipFrame], cams: list[Camera], stats: list[MaskStats
 
     field = sdf_field(frames, cams, ys, xs, zs, drop=drop,
                       min_views=min_views, tol_views=tol_views)
+    grid = assemble(field, bounds, step, cfg, smooth=smooth,
+                    open_iters=open_iters)
+    return grid, field, (ys, xs, zs)
+
+
+def assemble(field: np.ndarray, bounds: Bounds, step: float,
+             cfg: PipelineConfig, smooth: float = 2.0, open_iters: int = 2,
+             protect: np.ndarray | None = None) -> HullGrid:
+    """แปลงสนามระยะเป็นกริด occupancy พร้อมเก็บกวาด
+
+    ``protect`` คือเขตที่ห้ามกัดและห้ามเกลา — นิ้วมือที่ความละเอียด 320 หนา
+    แค่สาม voxel ส่วน opening ลบทุกอย่างที่บางกว่าสี่ และการเกลาด้วย sigma
+    สอง voxel ก็ถมร่องระหว่างนิ้วจนเรียบ สองขั้นนั้นจำเป็นกับลำตัวแต่เป็น
+    ตัวทำลายมือกับเท้า จึงต้องแยกกฎตามส่วน ไม่ใช่ตั้งค่าเดียวทั้งตัว
+    """
+    from scipy import ndimage
+
     if smooth > 0:
-        field = ndimage.gaussian_filter(field, smooth)
+        blurred = ndimage.gaussian_filter(field, smooth)
+        field = np.where(protect, field, blurred) if protect is not None             else blurred
 
     solid = field > 0
     if open_iters > 0:
         core = ndimage.binary_erosion(solid, iterations=open_iters)
         core = _largest_blob(core)
-        solid = solid & ndimage.binary_dilation(core, iterations=open_iters + 1)
+        kept = solid & ndimage.binary_dilation(core, iterations=open_iters + 1)
+        if protect is not None:
+            # ในเขตที่กันไว้ยังต้องกวาดอยู่ แค่เบามือลง: ไม่กวาดเลยจะเหลือ
+            # สะพานหนาหนึ่ง voxel ซึ่งกลายเป็นขอบ non-manifold ตอน marching
+            # cubes แล้วทำให้ bone heat weighting ของ Blender แก้ไม่ออก
+            # (อาการคือได้ไฟล์ที่ไม่มี skin เลยโดยไม่มี error อะไรแจ้ง)
+            soft = ndimage.binary_erosion(solid, iterations=1)
+            soft = solid & ndimage.binary_dilation(_largest_blob(soft),
+                                                   iterations=2)
+            kept = kept | (soft & protect)
+        solid = kept
     solid = _largest_blob(solid)
 
     band = 2.5 * step
@@ -292,7 +320,7 @@ def carve_sdf(frames: list[ClipFrame], cams: list[Camera], stats: list[MaskStats
 
     log.info("เฉือนเสร็จ: มีเนื้อ %.2f%% ของกริด (%.2f M voxel)",
              100 * solid.mean(), solid.sum() / 1e6)
-    return _to_hull_grid(occ, bounds, step, cfg), field, (ys, xs, zs)
+    return _to_hull_grid(occ, bounds, step, cfg)
 
 
 def _largest_blob(solid: np.ndarray) -> np.ndarray:

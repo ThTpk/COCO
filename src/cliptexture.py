@@ -264,26 +264,55 @@ def normal_map(texture: np.ndarray, filled: np.ndarray, strength: float = 1.0,
     ตรงที่ภาพต้นฉบับมีเงาตกกระทบแรง ๆ มันจะอ่านเงานั้นเป็นหลุมด้วย การตั้ง
     strength สูงเกินจึงทำให้ผิวดูเป็นรอยบุบแทนที่จะเป็นเกล็ด
     """
-    from .uvmap import pad_islands
-
-    lum = (0.299 * texture[:, :, 0] + 0.587 * texture[:, :, 1]
-           + 0.114 * texture[:, :, 2]).astype(np.float32)
-    detail = lum - cv2.GaussianBlur(lum, (0, 0), sigma)
-
-    inside = detail[filled]
-    spread = 1.4826 * float(np.median(np.abs(inside))) if inside.size else 1.0
-    h = np.clip(detail / max(3.0 * spread, 1e-3), -1.0, 1.0) * (0.5 * strength)
-
-    # ขยายค่าออกนอกขอบ island ก่อนหาความชัน ไม่งั้นรอยต่อระหว่าง island
-    # (ซึ่งเป็นสีคนละที่กันของตัวละคร) จะกลายเป็นสันคมพาดทั่วตัว
-    packed = np.clip(h * 127.0 + 128.0, 0, 255).astype(np.uint8)
-    packed = pad_islands(np.dstack([packed] * 3), filled, 8)[:, :, 0]
-    h = (packed.astype(np.float32) - 128.0) / 127.0
-
+    h = shading_height(texture, filled, sigma) * (0.5 * strength)
     out = normal_from_height(h, flip_green)
     log.info("สร้าง normal map %dx%d (strength %.2f)",
              out.shape[1], out.shape[0], strength)
     return out
+
+
+def shading_height(texture: np.ndarray, filled: np.ndarray,
+                   sigma: float = 4.0, chroma_guard: bool = True,
+                   ) -> np.ndarray:
+    """อ่าน "ความลึกของผิว" ออกจากความเข้มของสีบน texture คืนค่าในช่วง -1..1
+
+    หลักการ: ภายใต้แสงดวงเดียว ความสว่างของผิวด้านที่ไม่มันคือ rho * (n . l)
+    เมื่อสีเนื้อ (rho) คงที่ในละแวกเล็ก ๆ ความสว่างที่เปลี่ยนไปจึงมาจากความชัน
+    ของผิวล้วน ๆ  ยิ่งกว่านั้น ร่องลึกยังมืดเพราะแสงรอบข้างเข้าไม่ถึง
+    (ambient occlusion) ซึ่งเป็นสัญญาณที่ตรงกับ "ลึก" โดยตรง
+    ร่องระหว่างนิ้วมือนิ้วเท้าจึงอ่านออกมาเป็นเส้นมืดได้ชัดเจน
+
+    สองอย่างที่ต้องกันออกก่อน ไม่งั้นได้ความลึกปลอม
+
+    * **แสงเงาของทั้งก้อน** — แขนด้านที่หันเข้าคบไฟสว่างกว่าอีกด้านทั้งแขน
+      นั่นคือรูปทรงใหญ่ที่ mesh มีอยู่แล้ว ไม่ใช่ความขรุขระ ตัดทิ้งด้วยการ
+      ลบตัวเองที่เบลอแล้วออก เหลือแต่ความถี่สูง
+    * **ขอบของสีวัสดุ** — รอยต่อเสื้อยีนส์กับแขนส้มเป็นการเปลี่ยน *สี* ไม่ใช่
+      การเปลี่ยน *ความลึก* ถ้าไม่กัน ขอบแขนเสื้อจะกลายเป็นร่องลึกพาดรอบแขน
+      ตรงไหนที่สีเปลี่ยนแรงแต่ความสว่างไม่ได้เปลี่ยนเป็นสันหรือร่อง ให้หรี่ลง
+    """
+    from .uvmap import pad_islands
+
+    lab = cv2.cvtColor(texture, cv2.COLOR_RGB2LAB).astype(np.float32)
+    lum = lab[:, :, 0]
+    detail = lum - cv2.GaussianBlur(lum, (0, 0), sigma)
+
+    if chroma_guard:
+        # ความแรงของการเปลี่ยนสี (ไม่สนใจความสว่าง) ที่ความถี่เดียวกัน
+        chroma = np.abs(lab[:, :, 1] - cv2.GaussianBlur(lab[:, :, 1], (0, 0), sigma))
+        chroma += np.abs(lab[:, :, 2] - cv2.GaussianBlur(lab[:, :, 2], (0, 0), sigma))
+        ref = float(np.median(chroma[filled])) if filled.any() else 1.0
+        detail *= 1.0 / (1.0 + np.clip(chroma / max(4.0 * ref, 1e-3), 0, 4))
+
+    inside = detail[filled]
+    spread = 1.4826 * float(np.median(np.abs(inside))) if inside.size else 1.0
+    h = np.clip(detail / max(3.0 * spread, 1e-3), -1.0, 1.0)
+
+    # ขยายค่าออกนอกขอบ island ไม่งั้นรอยต่อของ UV atlas (ซึ่งเป็นคนละที่ของ
+    # ตัวละครมาอยู่ติดกัน) จะกลายเป็นสันคมพาดทั่วตัว
+    packed = np.clip(h * 127.0 + 128.0, 0, 255).astype(np.uint8)
+    packed = pad_islands(np.dstack([packed] * 3), filled, 8)[:, :, 0]
+    return (packed.astype(np.float32) - 128.0) / 127.0
 
 
 def normal_from_height(h: np.ndarray, flip_green: bool = False) -> np.ndarray:

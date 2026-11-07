@@ -27,8 +27,8 @@ from pathlib import Path
 
 import numpy as np
 
-from . import (clipcarve, clipmaterial, cliptexture, clipviews, meshing,
-               turntable, uvmap)
+from . import (clipcarve, clipdepth, clipmaterial, clipparts, cliptexture,
+               clipviews, meshing, turntable, uvmap)
 from .cli import _Fmt, banner, setup_logging
 from .config import INPUT_DIR, OUTPUT_DIR, PipelineConfig
 
@@ -95,6 +95,12 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--normal-strength", type=float, default=1.0,
                    help="ความแรงของ normal map ที่สร้างจากลายบน texture "
                         "(0 = ไม่ต้องสร้าง) สูงเกินผิวจะดูเป็นรอยบุบ")
+    g.add_argument("--no-parts", action="store_true",
+                   help="ไม่ต้องแยกกฎตามส่วนของตัว (นิ้ว ข้อมือ คอ) ใช้กฎเดียวทั้งตัว")
+    g.add_argument("--displace", type=float, default=1.0,
+                   help="ตัวคูณความลึกตอนดันผิวตามความเข้มของสี (0 = ไม่ดัน)")
+    g.add_argument("--displace-tris", type=int, default=260_000,
+                   help="งบสามเหลี่ยมหลังซอยเฉพาะส่วนที่มีรายละเอียด")
     g.add_argument("--no-materials", action="store_true",
                    help="ไม่ต้องแยกวัสดุแล้วใส่ลายเกล็ด/ผ้า/หนัง กับความมันของแต่ละวัสดุ")
     g.add_argument("--detail-scale", type=float, default=1.0,
@@ -185,6 +191,31 @@ def run_hull(a, cfg, frames, sol, out_dir: Path) -> int:
         F, C, S, cfg, a.voxel_res, drop=a.drop, smooth=a.field_smooth,
         open_iters=a.open_iters, tol_views=a.tol_views)
 
+    # ---- แยกกฎตามส่วนของตัว ---------------------------------------------
+    # ขั้นเก็บกวาดที่จำเป็นกับลำตัว (ลบแผ่นบาง เกลาสนาม) เป็นตัวทำลายมือ
+    # กับเท้า จึงอ่านโครงกระดูกจากกริดหยาบก่อน แล้วประกอบกริดใหม่โดยยกเว้น
+    # เขตเล็ก ๆ เหล่านั้น — ใช้สนามระยะเดิม ไม่ต้องเฉือนซ้ำ
+    from . import landmarks
+
+    parts = None
+    if not a.no_parts:
+        rough = clipcarve._to_hull_grid(
+            (field > 0).astype(np.float32),
+            clipcarve.bounds_from(C, S), axes[0][1] - axes[0][0], cfg)
+        try:
+            skel0 = landmarks.estimate(rough, cfg)
+        except ValueError as exc:
+            log.warning("อ่านโครงกระดูกจากกริดหยาบไม่ได้ (%s) — ข้ามการแยกส่วน", exc)
+        else:
+            unit_m = (axes[0][1] - axes[0][0]) * cfg.character_height_m
+            protect = clipparts.voxel_protect(
+                field.shape, skel0.joints, skel0.parents, unit_m)
+            grid = clipcarve.assemble(
+                field, clipcarve.bounds_from(C, S), axes[0][1] - axes[0][0],
+                cfg, smooth=a.field_smooth, open_iters=a.open_iters,
+                protect=protect)
+            parts = (skel0, unit_m)
+
     banner(4, 6, "สร้าง mesh: marching cubes -> smooth -> decimate")
     mesh = meshing.build(grid, cfg)
 
@@ -199,6 +230,25 @@ def run_hull(a, cfg, frames, sol, out_dir: Path) -> int:
             mesh, grid, axes, TF, TC, cfg, blend=a.texture_blend,
             occlusion=not a.no_occlusion, normal_strength=a.normal_strength)
         tex_img, nrm_img = baked.color, baked.normal
+
+        if a.displace > 0:
+            banner(5, 6, "ดันผิวตามความเข้มของสี ทีละส่วนของตัว")
+            height = cliptexture.shading_height(baked.color, baked.filled)
+            step = axes[0][1] - axes[0][0]
+            unit_m = parts[1] if parts else step * cfg.character_height_m
+            if parts:
+                labels = clipparts.label(mesh.verts, parts[0].joints,
+                                         parts[0].parents,
+                                         cfg.character_height_m, unit_m)
+                amp = clipparts.per_point(mesh.verts, labels, "depth_mm")
+                edge = clipparts.per_point(mesh.verts, labels, "edge_mm")
+            else:
+                amp = np.full(len(mesh.verts), 2.0)
+                edge = np.full(len(mesh.verts), 8.0)
+            to_vox = 1.0 / (1000.0 * unit_m)
+            mesh = clipdepth.displace(
+                mesh, height, amp * a.displace * to_vox, edge * to_vox,
+                budget=a.displace_tris)
 
         if not a.no_materials:
             banner(5, 6, "แยกวัสดุจากลาย แล้วใส่ลายผิวของวัสดุนั้น")

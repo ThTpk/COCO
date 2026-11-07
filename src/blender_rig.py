@@ -169,13 +169,36 @@ def bind(mesh_obj, arm_obj) -> str:
     for mode in ("ARMATURE_AUTO", "ARMATURE_ENVELOPE"):
         try:
             bpy.ops.object.parent_set(type=mode)
-            say(f"bind สำเร็จด้วยวิธี {mode}")
-            return mode
         except RuntimeError as exc:
             say(f"วิธี {mode} ไม่สำเร็จ: {exc}")
-            if mode == "ARMATURE_AUTO":
-                say("bone heat weighting มักล้มเมื่อ mesh ไม่ manifold "
-                    "หรือมีชิ้นส่วนลอย — กำลังลองวิธี envelope แทน")
+        else:
+            # ต้องนับ weight จริง ไม่ใช่เชื่อว่า operator ไม่ error
+            #
+            # bone heat weighting ล้มแบบเงียบ ๆ ได้: มันรายงานความล้มเหลวเป็น
+            # report ไม่ใช่ exception แล้วทิ้ง vertex group เปล่า ๆ ไว้ให้ครบทุก
+            # กระดูก  ตัว export glTF เจอ weight ศูนย์ทั้งก้อนก็ข้าม skin ไปเลย
+            # ได้ไฟล์ที่ดูเหมือนมีกระดูกแต่ตัวละครไม่ขยับตาม และไม่มีใครแจ้งอะไร
+            weighted = sum(1 for v in mesh_obj.data.vertices if v.groups)
+            if weighted:
+                say(f"bind สำเร็จด้วยวิธี {mode} "
+                    f"({weighted}/{len(mesh_obj.data.vertices)} vertex มี weight)")
+                return mode
+            say(f"วิธี {mode} ไม่ให้ weight สักจุด — ถอดแล้วลองวิธีถัดไป")
+            bpy.ops.object.select_all(action="DESELECT")
+            mesh_obj.select_set(True)
+            bpy.context.view_layer.objects.active = mesh_obj
+            bpy.ops.object.parent_clear(type="CLEAR_KEEP_TRANSFORM")
+            mesh_obj.vertex_groups.clear()
+            for mod in list(mesh_obj.modifiers):
+                mesh_obj.modifiers.remove(mod)
+            bpy.ops.object.select_all(action="DESELECT")
+            mesh_obj.select_set(True)
+            arm_obj.select_set(True)
+            bpy.context.view_layer.objects.active = arm_obj
+
+        if mode == "ARMATURE_AUTO":
+            say("bone heat weighting มักล้มเมื่อ mesh ไม่ manifold "
+                "หรือมีชิ้นส่วนลอย — กำลังลองวิธี envelope แทน")
     raise SystemExit("ผูก mesh เข้ากับ armature ไม่สำเร็จทั้งสองวิธี")
 
 
@@ -378,6 +401,23 @@ def main() -> None:
         clips = json.loads(Path(anim_path).read_text(encoding="utf-8"))
         made = apply_clips(arm_obj, clips)
         say(f"สร้างอนิเมชัน {len(made)} clip: {', '.join(made)}")
+
+    # ตรวจก่อน export ว่า mesh ผูกกับ armature จริง ไม่ใช่แค่ operator ไม่ error
+    #
+    # เคยเจอกรณีที่ parent_set คืนค่าสำเร็จ แต่ไฟล์ที่ได้ไม่มี skin เลย ซึ่งเงียบ
+    # สนิทจนกว่าจะเปิดดูแล้วพบว่าตัวละครไม่ขยับตามกระดูก
+    weighted = sum(1 for v in mesh_obj.data.vertices if v.groups)
+    deform = sum(1 for b in arm_obj.data.bones if b.use_deform)
+    say(f"ตรวจ weight: vertex ที่มี weight {weighted}/{len(mesh_obj.data.vertices)}, "
+        f"กระดูกที่ deform ได้ {deform}/{len(arm_obj.data.bones)}")
+    mods = [m.type for m in mesh_obj.modifiers]
+    say(f"ก่อน export: parent={getattr(mesh_obj.parent, 'name', None)} "
+        f"modifiers={mods} vertex_groups={len(mesh_obj.vertex_groups)}")
+    if "ARMATURE" not in mods:
+        say("mesh ยังไม่มี armature modifier — ใส่ให้เองแล้วผูก parent")
+        mod = mesh_obj.modifiers.new(name="Armature", type="ARMATURE")
+        mod.object = arm_obj
+        mesh_obj.parent = arm_obj
 
     export_glb(Path(args["out"]), args.get("draco") == "1")
     say("เสร็จสมบูรณ์")
