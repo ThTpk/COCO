@@ -191,11 +191,26 @@ def bake(
 
     idx = np.flatnonzero(filled)
     log.info("กำลังฉายสีลง %d texel ...", len(idx))
-    colors = project_colors(pos[idx], nrm[idx], grid, views, cfg)
+    colors, blind = project_colors(pos[idx], nrm[idx], grid, views, cfg,
+                                   return_blind=True)
 
     img = np.zeros((size * size, 3), np.uint8)
     img[idx] = colors
     img = img.reshape(size, size, 3)
+
+    # --- เติมรูด้วยสีข้างเคียง ไม่ใช่สีเฉลี่ยทั้งตัว ------------------------
+    #
+    # ซอกที่ไม่มีมุมไหนเห็น (หว่างขากับหาง, ใต้รักแร้) ถ้าเติมด้วยสีเฉลี่ย
+    # ของตัวละครจะได้หย่อมสีน้ำตาลกลาง ๆ แปะอยู่กลางขากางเกงสีฟ้า
+    # เติมจากเพื่อนบ้านบน atlas ให้สีกลืนไปกับผิวรอบ ๆ แทน
+    if blind.any():
+        import cv2
+        hole = np.zeros(size * size, np.uint8)
+        hole[idx[blind]] = 255
+        hole = hole.reshape(size, size)
+        img = cv2.inpaint(img, hole, 4, cv2.INPAINT_TELEA)
+        log.info("เติมรู texture ด้วยสีข้างเคียง %d texel (%.1f%% ของที่มีเนื้อ)",
+                 int(blind.sum()), 100 * blind.mean())
 
     img = pad_islands(img, filled.reshape(size, size), cfg.uv_padding)
     log.info("bake texture %dx%d เสร็จ (ขยายขอบ %d พิกเซล)",

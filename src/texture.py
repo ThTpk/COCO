@@ -81,6 +81,7 @@ def project_colors(
     grid: HullGrid,
     views: dict[str, PreparedView],
     cfg: PipelineConfig,
+    return_blind: bool = False,
 ) -> np.ndarray:
     """ฉายสีจากทุกมุมลงบนจุดใด ๆ ในพิกัด voxel คืนสี (N, 3) uint8
 
@@ -116,7 +117,13 @@ def project_colors(
         total_w += w
         log.debug("มุม %-6s ให้สีกับ %d/%d vertex", name, int((w > 1e-4).sum()), len(v))
 
-    blind = total_w <= 1e-6
+    # เกณฑ์ "ไม่มีมุมไหนเห็น" ต้องไม่ใช่ศูนย์เป๊ะ
+    #
+    # texel ที่ได้น้ำหนักระดับ 1e-5 คือผิวที่เกือบขนานกับทุกกล้อง ค่าที่สุ่ม
+    # ได้มาจึงตกนอก silhouette แล้วได้สีดำของพื้นหลังมาเต็ม ๆ ทั้งที่ยังนับ
+    # ว่า "เห็น" อยู่ (วัดได้ว่า 101,095 texel ในเกาะออกมาดำสนิท ทั้งที่
+    # ตัวเติมสีสำรองทำงานอยู่แล้ว เพราะมันไม่ถูกนับเป็น blind)
+    blind = total_w <= max(float(getattr(cfg, "texture_min_weight", 0.02)), 1e-6)
     if blind.any():
         # vertex ที่ไม่มีมุมไหนเห็น (ซอกลึก) — เติมด้วยสีเฉลี่ยของตัวละคร
         fallback = np.zeros(3, np.float32)
@@ -131,7 +138,8 @@ def project_colors(
         log.info("เติมสีสำรองให้ %d จุด (%.1f%%) ที่ไม่มีมุมไหนมองเห็น",
                  int(blind.sum()), 100 * blind.mean())
 
-    return np.clip(total_c / total_w[:, None], 0, 255).astype(np.uint8)
+    out = np.clip(total_c / total_w[:, None], 0, 255).astype(np.uint8)
+    return (out, blind) if return_blind else out
 
 
 def project_vertex_colors(

@@ -46,6 +46,9 @@ class HullGrid:
     # รัศมีหางที่แต่ละจุดบน tail_path (หน่วย voxel) — ใช้ปั้นหางเป็น mesh จริง
     # ตอนที่ใช้โมเดลฐาน ซึ่งไม่ได้ผ่าน marching cubes จาก occupancy
     tail_radius: np.ndarray | None = None
+    #: แถวของ *แนวคาง* ที่ขั้น carve หาได้ — landmarks เอาไปวางคอ
+    #: เพราะกฎ "ลำตัวคอดตรงคอ" ใช้กับหัวสัตว์ปากยาวไม่ได้
+    chin_row: int | None = None
 
     @property
     def shape(self) -> tuple[int, int, int]:
@@ -822,6 +825,91 @@ def _trace_to_voxels(trace, grid: HullGrid, ny: int, nx: int) -> np.ndarray:
                      np.interp(su, s, hw)], axis=1)
 
 
+
+def _tail_depth_from_top(sd, tail_vox, top_plan, cfg):
+    """หาว่าหางอยู่ที่ความลึก Z เท่าไรในแต่ละแถว แล้วคืนทั้งเส้นกับเงาของมัน
+
+    ทำไมต้องมีขั้นนี้: ในมุมข้าง หางกับขาเป็นก้อนเดียวกัน ``_body_depth_profile``
+    จึงนับความลึกของหางเป็นความลึกของลำตัว ผลคือลำตัวบวม (วัดได้ว่าช่วงต้นขา
+    ลึก 292 px ทั้งที่กว้างแค่ 259 px) และที่ว่างด้านหลังที่ควรเป็นของหางถูก
+    กินไปจนหางยื่นได้แค่เศษเดียว
+
+    ข้อมูลที่ใช้มาจากสองภาพที่ไม่ใช่มุมข้างเลย จึงไม่ติดข้อจำกัดนั้น
+      * มุมหลัง -> หางอยู่ *แถวไหน* (``tail_vox``)
+      * มุมบน   -> หางถอยหลัง *กี่เท่าของความลึกลำตัว* (``top_plan.back_at``)
+    จับคู่กันด้วยความยาวตามเส้น เพราะทั้งสองเรียงจากโคนไปปลายเหมือนกัน
+
+    ไม้บรรทัดคือความลึกลำตัววัดจากแถวที่ *ไม่มีหางพาด* (เหนือโคนหางขึ้นไป)
+    ซึ่งเป็นค่าที่เชื่อได้ ไม่ใช่ความลึกที่สะโพกซึ่งปนหางอยู่แล้ว
+    """
+    if top_plan is None or getattr(top_plan, "tail_back", None) is None:
+        return None, None
+    ny, nz = sd.shape
+    rows = np.array([int(round(ty)) for _, ty, _ in tail_vox])
+    ok = (rows >= 0) & (rows < ny)
+    if ok.sum() < 8:
+        return None, None
+    y_root = int(rows[ok].max())          # โคนหาง = แถวสูงสุดที่หางแตะ
+
+    # ความลึกลำตัวจากแถวที่ไม่มีหาง
+    clean = [np.ptp(np.flatnonzero(sd[y])) + 1
+             for y in range(y_root + 1, ny) if sd[y].any()]
+    if len(clean) < 8:
+        return None, None
+    body_depth = float(np.percentile(clean, 90))
+
+    # ผิวหลังของ *ลำตัว* ที่โคนหาง — ต้องอ่านจากแถวที่อยู่ *เหนือ* โคนหางขึ้นไป
+    #
+    # ถ้าอ่านที่แถวโคนหางตรง ๆ จะได้ขอบหลังของ *หาง* มาแทน (หางอยู่ในเงาแล้ว
+    # ที่แถวนั้น) แล้วเงาหางที่คำนวณจะไปตกหลังตัวละครทั้งก้อน ลบอะไรแทบไม่ได้
+    gap = max(4, int(0.04 * ny))
+    backs = [float(np.flatnonzero(sd[y]).min())
+             for y in range(y_root + gap, min(y_root + 4 * gap, ny))
+             if sd[y].any()]
+    if not backs:
+        return None, None
+    z_back_root = float(np.median(backs))
+
+    n_pts = max(len(tail_vox) - 1, 1)
+    path_z = np.zeros(len(tail_vox), np.float32)
+    zs = np.arange(nz, dtype=np.float32)
+
+    # เก็บ *ช่วง* Z ที่หางกินในแต่ละแถว ไม่ใช่จานรอบจุดเดี่ยว ๆ
+    #
+    # ช่วงที่หางเกือบนอน หนึ่งแถวครอบความยาวหางหลายสิบ voxel ถ้าลบแค่จานรัศมี
+    # เท่าความหนาหาง จะเหลือเนื้อหางคาอยู่ในเงาเกือบทั้งแถบ แล้ว
+    # _body_depth_profile ก็ยังนับมันเป็นความลึกลำตัวเหมือนเดิม
+    lo = np.full(ny, np.inf, np.float32)
+    hi = np.full(ny, -np.inf, np.float32)
+    for i, (_tx, ty, thw) in enumerate(tail_vox):
+        t = i / n_pts
+        z = z_back_root - float(top_plan.back_at(t)) * body_depth
+        path_z[i] = z
+        y = int(round(ty))
+        if not (0 <= y < ny):
+            continue
+        r = max(float(thw) * cfg.tail_thickness, 1.0)
+        lo[y] = min(lo[y], z - r)
+        hi[y] = max(hi[y], z + r)
+
+    # เติมแถวที่ไม่มีจุดตกลงมา ด้วยการ interpolate จากแถวข้างเคียง
+    have = np.flatnonzero(np.isfinite(lo))
+    if have.size >= 2:
+        span = np.arange(have.min(), have.max() + 1)
+        lo[span] = np.interp(span, have, lo[have])
+        hi[span] = np.interp(span, have, hi[have])
+
+    shadow = np.zeros_like(sd)
+    for y in range(ny):
+        if not np.isfinite(lo[y]):
+            continue
+        shadow[y] = (zs >= lo[y]) & (zs <= hi[y])
+    shadow = ndimage.binary_dilation(shadow, np.ones((3, 3), bool))
+    log.info("แยกหางออกจากเงามุมข้าง: ลำตัวลึกอ้างอิง %.0f voxel, "
+             "หางถอยหลังถึง %.0f voxel (จากผิวหลังที่ %.0f)",
+             body_depth, path_z.min(), z_back_root)
+    return path_z, shadow
+
 def _add_tail_tube(
     occ: np.ndarray,
     tail_vox: np.ndarray,
@@ -829,6 +917,8 @@ def _add_tail_tube(
     rz: np.ndarray,
     valid: np.ndarray,
     cfg: PipelineConfig,
+    top_plan=None,
+    tail_z_path=None,
 ) -> np.ndarray:
     """ปั้นหางเป็นท่อกลมตามเส้นทางที่ลากจากภาพด้านหลัง
 
@@ -845,14 +935,53 @@ def _add_tail_tube(
     path = []
     last_row = -999
 
-    for ix, iy, hw in tail_vox:
+    # --- ความลึกของหาง: เอาจากผังมุมบนถ้ามี ------------------------------
+    #
+    # ไม่มีผัง = ต้องเดาว่าหางแปะผิวหลังลำตัวทุกแถว ซึ่งผิดทันทีที่หางสะบัด
+    # ออกหน้าหรือพาดขวางขา มีผัง = อ่าน Z จริงจากระนาบ X-Z ได้เลย
+    #
+    # จุดอ้างอิงคือลำตัวที่ *แถวโคนหาง* ไม่ใช่แถวปัจจุบัน เพราะแถวล่าง ๆ
+    # ลำตัวกลายเป็นขาไปแล้ว ค่า cz/rz ตรงนั้นไม่ใช่ความลึกของลำตัวอีกต่อไป
+    # ใช้ผังเป็น *รูปร่างเชิงสัดส่วน* เหมือนที่ soleplan ทำกับฝ่าเท้า ไม่ใช่
+    # เอาสเกลดิบมาใช้ — ภาพมุมบนเป็น perspective แรง สเกลของมันเชื่อไม่ได้
+    # ปลายทั้งสองข้างจึงยึดกับค่าที่ *วัดได้จาก hull*:
+    #   โคนหาง  = ผิวหลังของลำตัวที่แถวโคน (เท่ากับที่โค้ดเดิมใช้อยู่แล้ว)
+    #   ปลายหาง = ขอบหลังสุดของกริด ซึ่งมาจากเงามุมข้างที่เห็นหางเต็ม ๆ
+    # ที่เหลือระหว่างกลางคือ *เส้นโค้ง* จากผัง ซึ่งเป็นสิ่งเดียวที่มุมอื่นไม่มี
+    z_root = z_tip = None
+    if top_plan is not None and len(top_plan) >= 2:
+        for _tx, _ty, _thw in tail_vox:
+            _y = int(round(_ty))
+            if 0 <= _y < ny and valid[_y]:
+                z_root = float(cz[_y] - rz[_y])
+                break
+        if z_root is not None:
+            z_tip = 1.5                      # เผื่อขอบกริดไว้เล็กน้อย
+            pz0, pz1 = float(top_plan.tail_z[0]), float(top_plan.tail_z[-1])
+            if abs(pz1 - pz0) < 1e-3:
+                z_root = z_tip = None
+            else:
+                log.info("ความลึกหางอ่านจากผังมุมบน: โคน z=%.1f -> ปลาย z=%.1f "
+                         "(เดิมเดาว่าแปะผิวหลังทุกแถว)", z_root, z_tip)
+    n_pts = max(len(tail_vox) - 1, 1)
+
+    for i_pt, (ix, iy, hw) in enumerate(tail_vox):
         y = int(round(iy))
         if not (0 <= y < ny) or not valid[y]:
             continue
         r = max(float(hw) * cfg.tail_thickness, 1.0)
-        # +Z คือทิศหน้า ผิวหลังจึงอยู่ที่ cz - rz และการดันหางออกไปด้านหลัง
-        # คือการ *ลบ* ค่าลงไปอีก ไม่ใช่บวก
-        czt = float(cz[y] - rz[y]) - r * cfg.tail_z_bias
+        if tail_z_path is not None and i_pt < len(tail_z_path):
+            czt = float(tail_z_path[i_pt])
+        elif z_root is not None:
+            # ผังมุมบนเรียงจากโคนไปปลายเหมือน tail_vox จับคู่ด้วยความยาว
+            # ตามเส้น (สัดส่วน 0..1) ไม่ใช่ด้วยค่า X ซึ่งพังเมื่อหางวนกลับ
+            _, z_rel, _ = top_plan.sample(i_pt / n_pts)
+            u = (float(z_rel) - pz0) / (pz1 - pz0)      # 0 ที่โคน, 1 ที่ปลาย
+            czt = z_root + u * (z_tip - z_root)
+        else:
+            # +Z คือทิศหน้า ผิวหลังจึงอยู่ที่ cz - rz และการดันหางออกไปด้านหลัง
+            # คือการ *ลบ* ค่าลงไปอีก ไม่ใช่บวก
+            czt = float(cz[y] - rz[y]) - r * cfg.tail_z_bias
 
         y0, y1 = max(0, int(np.floor(iy - r))), min(ny, int(np.ceil(iy + r)) + 1)
         x0, x1 = max(0, int(np.floor(ix - r))), min(nx, int(np.ceil(ix + r)) + 1)
@@ -884,6 +1013,8 @@ def _fill_elliptical(
     tail_span: np.ndarray | None = None,
     ext=None,
     sole_plans: list | None = None,
+    top_plan=None,
+    hand_plans: list | None = None,
 ) -> np.ndarray:
     """สร้างหน้าตัดเป็นวงรีแทนสี่เหลี่ยม
 
@@ -909,6 +1040,17 @@ def _fill_elliptical(
     cz_profile, rz_profile, valid, z_back_raw = _body_depth_profile(sd, cfg)
     rx_body = _body_width_profile(fb, min_run)
 
+    # กรอบ X ของ *ทั้งตัว* (ไม่ใช่ของแถวเดียว) ใช้เทียบกับผังมุมบน ซึ่งวัด
+    # ความลึกมาในหน่วยเดียวกัน
+    _bx = np.flatnonzero(fb.any(axis=0))
+    body_cx = 0.5 * (float(_bx[0]) + float(_bx[-1])) if _bx.size else 0.5 * nx
+    body_hx = max(0.5 * (float(_bx[-1]) - float(_bx[0])), 1.0) if _bx.size else 1.0
+    use_top_prof = (top_plan is not None
+                    and getattr(top_plan, "prof_x", None) is not None)
+    if use_top_prof:
+        log.info("ความลึกของหน้าตัดอ่านจากผังมุมบน แทนกฎ depth_falloff "
+                 "(มุมข้างยังเป็นคนบอกความลึกรวมต่อความสูงเหมือนเดิม)")
+
     # หาแนวคาง *ก่อน* เกลาโปรไฟล์
     #
     # สัญญาณของคางคือขอบหน้าถอยกลับฮวบเดียวภายในแถวเดียว พอเกลาด้วย gaussian
@@ -927,9 +1069,67 @@ def _fill_elliptical(
         rz_profile = ndimage.gaussian_filter1d(rz_profile, sm, mode="nearest")
         rx_body = ndimage.gaussian_filter1d(rx_body, sm, mode="nearest")
 
+    # --- เกลาเพิ่มเฉพาะช่วงขา ---------------------------------------------
+    #
+    # ขาเป็นท่อนตรงที่หน้าตัดเปลี่ยนช้า ๆ โปรไฟล์ความลึกจึงควรเรียบ แต่มันรับ
+    # การกระโดดจากทุกอย่างที่บังเอิญอยู่แถวเดียวกัน (หางพาด มือห้อย ปลายเท้า)
+    # ผลคือหน้าแข้งมีครีบยื่นออกมาแล้วคอดกลับที่ข้อเท้า
+    #
+    # เกลาแรง ๆ ทั้งตัวไม่ได้ — ปากจระเข้ที่ยื่นไปหน้าจะถูกเกลี่ยจนกลายเป็น
+    # ครีบพาดหัว (ลองแล้วที่ profile_smooth 31 หัวหายทั้งหัว) จึงจำกัดไว้
+    # ใต้สะโพกลงไปเท่านั้น และไล่ระดับที่ขอบบนไม่ให้เกิดรอยต่อคม
+    leg_sm = float(cfg.leg_profile_smooth)
+    idx = np.flatnonzero(valid)
+    y_lo = int(idx.min()) if idx.size else 0
+    span = max((int(idx.max()) - y_lo) if idx.size else 1, 1)
+    y_top = y_lo + int(cfg.leg_band_top * span)              # ขอบบนของเขตขา
+    w = np.clip((y_top - np.arange(ny, dtype=np.float32))
+                / max(cfg.leg_band_blend * span, 1.0), 0.0, 1.0)
+    w[: y_lo] = 0.0
+    if leg_sm > 0 and idx.size > 16:
+        for name, arr in (("cz", cz_profile), ("rz", rz_profile)):
+            sm_arr = ndimage.gaussian_filter1d(arr, leg_sm, mode="nearest")
+            arr[:] = (1.0 - w) * arr + w * sm_arr
+        log.info("เกลาโปรไฟล์ความลึกช่วงขาเพิ่ม sigma %.0f ใต้แถว %d "
+                 "(%.0f%% ของความสูง)", leg_sm, y_top,
+                 100 * cfg.leg_band_top)
+
+
     (rz_profile, cz_profile, rx_head, z_front_orig,
      z_back_pre_aspect, head_rows) = _limit_aspect(
         rz_profile, cz_profile, rx_body, valid, cfg, y_chin)
+
+    # --- เติมรอยเว้าด้านหลังขา -------------------------------------------
+    #
+    # ต้องทำ *หลัง* _limit_aspect เพราะขั้นนั้นหั่นความลึกโดยตรึงขอบหน้าแล้ว
+    # ดันขอบหลังเข้ามา ถ้าเติมก่อน มันจะถูกหั่นกลับไปทั้งหมด (ลองแล้ว ค่าที่
+    # 10-16% ของความสูงไม่ขยับเลยสักพิกเซล)
+    #
+    # ขั้นหักหางออกจากเงามุมข้างกันหางไม่ให้พองความลึกลำตัวได้ก็จริง แต่แถว
+    # ที่หางพาดอยู่ *หลังน่องพอดี* จะถูกเฉือนเข้าเนื้อขาไปด้วย เพราะมุมข้าง
+    # แยกไม่ออกว่าตรงนั้นเป็นหางหรือเป็นน่อง หลังน่องจึงแหว่งเป็นแอ่ง
+    #
+    # ขาเป็นท่อนตัน ผิวหลังต้องต่อเนื่อง จึงดันกลับไปเท่าแถวข้างเคียงที่ถอย
+    # หลังสุด — ดันออกอย่างเดียว ไม่เคยเฉือนเพิ่ม และเว้นเขตเท้าไว้
+    fill = int(cfg.leg_fill_dip * span) if idx.size > 16 else 0
+    if fill >= 3 and float(cfg.leg_fill_dip) > 0:
+        z_back = cz_profile - rz_profile
+        z_front = cz_profile + rz_profile
+        filled = np.minimum(
+            ndimage.minimum_filter1d(z_back, fill, mode="nearest"), z_back)
+        # ไล่ระดับขอบล่างให้ยาวพอ ไม่งั้นรอยต่อกับเขตเท้ากลายเป็นครีบยื่น
+        wf = w.copy()
+        y_foot = y_lo + int(cfg.leg_fill_floor * span)
+        ramp = max(int(cfg.leg_fill_blend * span), 1)
+        t_f = np.clip((np.arange(ny, dtype=np.float32) - y_foot) / ramp, 0.0, 1.0)
+        wf *= t_f * t_f * (3.0 - 2.0 * t_f)          # smoothstep
+        new_back = (1.0 - wf) * z_back + wf * filled
+        gained = float(np.max(z_back - new_back))
+        rz_profile = (0.5 * (z_front - new_back)).astype(np.float32)
+        cz_profile = (0.5 * (z_front + new_back)).astype(np.float32)
+        if gained > 0.5:
+            log.info("เติมรอยเว้าหลังขา: ดันผิวหลังออกสูงสุด %.0f voxel "
+                     "(หน้าต่าง %d แถว)", gained, fill)
 
     # หาหางก่อนปั้นลำตัว เพราะลำตัวต้องรู้ว่าท่อนไหนคือหางเพื่อจะได้ข้ามไป
     limb_runs, body_cx = _limb_runs(fb, min_run, cfg)
@@ -1003,7 +1203,14 @@ def _fill_elliptical(
             # ตรึงอัตราส่วนไว้ ไม่ให้ชิ้นที่กว้างกว่าลำตัว (เช่นช่วงไหล่กางแขน)
             # ได้ความลึกเกินความหนาจริงของตัว และไม่ให้ชิ้นที่บางมากแบนจนหาย
             ratio = float(np.clip(rx / rx_max, 0.15, 1.0))
-            rz = rz_full * ratio ** cfg.depth_falloff
+            if use_top_prof:
+                # มุมข้างบอก "แถวนี้ลึกเท่าไร" (rz_full) ส่วนมุมบนบอก
+                # "ที่ตำแหน่ง X นี้ ลึกกี่ส่วนของค่านั้น" — แขนจึงได้ความลึก
+                # ที่วัดมาจริง ไม่ใช่ค่าที่เดาจากความกว้างของตัวเอง
+                g = float(top_plan.depth_at((cx - body_cx) / body_hx))
+                rz = rz_full * float(np.clip(g, 0.12, 1.0))
+            else:
+                rz = rz_full * ratio ** cfg.depth_falloff
             cz_run = cz
 
             grp = zone_group.get((a, b))
@@ -1066,17 +1273,22 @@ def _fill_elliptical(
         elif cfg.toe_grooves:
             _ext.carve_toe_grooves(occ, ext, cz_profile, rz_profile, valid, cfg)
 
+        # --- มือ: เซาะร่องนิ้วตามผังมือ -----------------------------------
+        if hand_plans:
+            from . import handplan as _hp
+            _hp.apply(occ, ext, hand_plans, cfg)
+
     if pruned_count:
         log.info("ตัดเนื้อหางออกจากขั้นปั้นลำตัว %d แถว (ไปปั้นใหม่ที่ความลึกจริงแทน)", pruned_count)
     if dropped_rows:
         log.info("ตัดส่วนที่ยื่นออกจากลำตัวใน mask ด้านข้าง %d แถว "
                  "(หาง/เป้/ปีก จะไม่ไปพองความหนาลำตัว)", dropped_rows)
-    return occ, cz_profile, rz_profile, valid, crest_zone
+    return occ, cz_profile, rz_profile, valid, crest_zone, y_chin
 
 
 def _blend_detail_blur(
     field: np.ndarray, blurred: np.ndarray, zone: np.ndarray,
-    cfg: PipelineConfig, what: str = "มือ/เท้า",
+    cfg: PipelineConfig, what: str = "มือ/เท้า", sigma: float | None = None,
 ) -> np.ndarray:
     """เบลอเขตรายละเอียดเบากว่าที่อื่น แล้วไล่ระดับเข้าหากันไม่ให้มีรอยต่อ
 
@@ -1096,8 +1308,8 @@ def _blend_detail_blur(
     y0 = max(0, int(idx[0]) - pad)
     y1 = min(field.shape[0], int(idx[-1]) + 1 + pad)
 
-    sub = ndimage.gaussian_filter(field[y0:y1], sigma=float(cfg.detail_blur),
-                                  mode="constant")
+    sig = float(cfg.detail_blur if sigma is None else sigma)
+    sub = ndimage.gaussian_filter(field[y0:y1], sigma=sig, mode="constant")
 
     # น้ำหนัก: 1 ในเขต แล้วไล่ลงเป็น 0 ภายในระยะ ~hull_blur
     w = ndimage.gaussian_filter(zone.astype(np.float32),
@@ -1106,7 +1318,7 @@ def _blend_detail_blur(
 
     blurred[y0:y1] = (1.0 - w) * blurred[y0:y1] + w * sub
     log.info("เบลอเขต%sด้วย sigma %.1f (ลำตัวใช้ %.1f) ครอบแถว %d-%d",
-             what, cfg.detail_blur, cfg.hull_blur, y0, y1 - 1)
+             what, sig, cfg.hull_blur, y0, y1 - 1)
     return blurred
 
 
@@ -1145,7 +1357,8 @@ def _scaled_cfg(cfg: PipelineConfig) -> PipelineConfig:
 
 
 def carve(views: dict[str, PreparedView], cfg: PipelineConfig,
-          sole_plans: list | None = None) -> HullGrid:
+          sole_plans: list | None = None, top_plan=None,
+          hand_plans: list | None = None) -> HullGrid:
     """ตัดกริด voxel ด้วย silhouette ของทุกมุม
 
     voxel เป็นลูกบาศก์จริง (ขนาดเท่ากันทั้งสามแกน) กริดจึงไม่ใช่ทรงลูกบาศก์
@@ -1156,6 +1369,19 @@ def carve(views: dict[str, PreparedView], cfg: PipelineConfig,
     row_top, row_bottom = _row_extent(views)
     x0, x1 = _axis_extent(views, "x")
     z0, z1 = _axis_extent(views, "z")
+
+    # เผื่อที่ด้านหลังให้หาง เมื่อมีผังมุมบนเป็นคนบอกความลึกหาง
+    #
+    # ขอบกริดตามแกน Z มาจากเงามุมข้าง ซึ่งเห็นหางพาดทับลำตัวเป็นก้อนเดียวกัน
+    # ขอบหลังสุดจึงไปตกที่ "ส่วนที่ยื่นหลังสุดของเงารวม" ไม่ใช่ที่ปลายหางจริง
+    # พอแยกความลึกหางออกมาแล้ว หางต้องการที่มากกว่านั้น (วัดได้ว่าเลยขอบไป
+    # 34 voxel จาก 204) ถ้าไม่เผื่อไว้ ลูกกลมช่วงปลายหางจะถูกตัดทิ้งเงียบ ๆ
+    # แล้วหางสั้นลงแทนที่จะยาวขึ้น
+    if top_plan is not None and getattr(top_plan, "tail_back", None) is not None:
+        grow = float(np.clip(abs(top_plan.tail_back[-1]), 0.0, 1.0)) * (z1 - z0)
+        z0 -= grow
+        log.info("เผื่อที่ด้านหลังให้หางอีก %.0f px (ขอบ Z %.0f -> %.0f)",
+                 grow, z0 + grow, z0)
 
     pad = 2.0  # เผื่อขอบ 2 พิกเซล กัน mesh ไปติดผิวกริด
     ext_y = (row_bottom - row_top) + 1 + 2 * pad
@@ -1239,16 +1465,66 @@ def carve(views: dict[str, PreparedView], cfg: PipelineConfig,
             tail_span = np.stack([np.where(tail_rows, lo, 0.0),
                                   np.where(tail_rows, hi, 0.0)], axis=1)
 
-        occ, czp, rzp, valid, crest_zone = _fill_elliptical(
-            fb, sd, cfg, tail_rows, tail_span, ext, sole_plans)
+        tail_z_path, tail_shadow = (None, None)
+        if tail_vox is not None:
+            tail_z_path, tail_shadow = _tail_depth_from_top(
+                sd, tail_vox, top_plan, cfg)
+            if tail_shadow is not None:
+                before_sd = int(sd.sum())
+                sd = sd & ~tail_shadow
+                log.info("ลบหางออกจากเงามุมข้าง %d -> %d px (%.1f%%)",
+                         before_sd, int(sd.sum()),
+                         100 * (before_sd - int(sd.sum())) / max(before_sd, 1))
+
+        occ, czp, rzp, valid, crest_zone, y_chin = _fill_elliptical(
+            fb, sd, cfg, tail_rows, tail_span, ext, sole_plans, top_plan,
+            hand_plans)
+        grid.chin_row = int(y_chin) if y_chin and y_chin > 0 else None
 
         if tail_vox is not None:
             grid.tail_path, grid.tail_radius = _add_tail_tube(
-                occ, tail_vox, czp, rzp, valid, cfg)
+                occ, tail_vox, czp, rzp, valid, cfg, top_plan, tail_z_path)
     else:
         # โหมด hull ตามนิยาม ใช้ช่วง Z ทั้งหมดอยู่แล้ว หางจึงติดมาเอง
         occ = fb[:, :, None] & sd[:, None, :]
         crest_zone = np.zeros_like(fb)
+
+    # --- ทิ้งเศษที่ลอยไม่ติดตัว ------------------------------------------
+    #
+    # หน้าตัดแต่ละแถวคำนวณอิสระกัน ช่วงที่ความลึกกระโดด (หว่างขา ซอกแขน) จึง
+    # เกิดก้อนที่ไม่ต่อกับตัวได้ โผล่เป็นปุ่มลอยในมุมหน้า/หลัง
+    #
+    # ตัดเฉพาะก้อนเล็กจริง ๆ แล้ว *บอกออกมาด้วย* ว่าตัดอะไรไปตรงไหน ถ้ามือ
+    # หรือเท้าหลุดจนโดนตัด จะได้เห็นในล็อกแทนที่จะหายไปเงียบ ๆ
+    if cfg.drop_loose > 0:
+        lab_c, n_c = ndimage.label(occ)
+        if n_c > 1:
+            sz_c = np.bincount(lab_c.ravel())
+            sz_c[0] = 0
+            keep_c = int(sz_c.argmax())
+            limit = cfg.drop_loose * float(sz_c[keep_c])
+            dropped = 0
+            for i in range(1, n_c + 1):
+                if i == keep_c or sz_c[i] == 0:
+                    continue
+                if sz_c[i] > limit:
+                    ys_d, xs_d, _ = np.nonzero(lab_c == i)
+                    log.warning("ก้อนหลุดขนาด %d voxel ที่ความสูง %.0f%% "
+                                "ใหญ่เกิน %.0f%% จึงเก็บไว้ — ตรวจดูด้วย",
+                                sz_c[i], 100 * ys_d.mean() / occ.shape[0],
+                                100 * cfg.drop_loose)
+                    continue
+                ys_d, xs_d, zs_d = np.nonzero(lab_c == i)
+                log.info("ทิ้งเศษลอย %d voxel ที่ความสูง %.0f-%.0f%% "
+                         "(X %d-%d, Z %d-%d)", sz_c[i],
+                         100 * ys_d.min() / occ.shape[0],
+                         100 * ys_d.max() / occ.shape[0],
+                         xs_d.min(), xs_d.max(), zs_d.min(), zs_d.max())
+                occ[lab_c == i] = False
+                dropped += int(sz_c[i])
+            if dropped:
+                log.info("ทิ้งเศษลอยรวม %d voxel (%.2f%% ของตัว)",
+                         dropped, 100 * dropped / max(int(occ.sum()), 1))
 
     if not occ.any():
         raise RuntimeError(
@@ -1270,11 +1546,23 @@ def carve(views: dict[str, PreparedView], cfg: PipelineConfig,
             # หนามสูงราว 6 voxel หนา 4 voxel การเบลอ sigma 3.6 ลบมันเกลี้ยง
             # ทั้งที่ `_add_crest` เพิ่งปั้นคืนมาให้ ผลคือหัวเรียบเป็นกรวย
             # ไม่มีสันเลย ทั้งที่ภาพต้นทางมีสันหนามเป็นเอกลักษณ์
+            # แยกเขตมือกับเขตเท้าออกจากกัน — ใช้ค่าเบลอคนละตัว
+            #
+            # นิ้วมือต้องการเบลอน้อย (0.3) ไม่งั้นร่องที่ผังมือเซาะไว้ถูกปิด
+            # กลับหมด แต่เท้าที่ sigma เดียวกันจะกลายเป็นตะแกรง เพราะขั้น
+            # apply_sole_plan ขยายผังทีละแถว ทุกขั้นของการขยายเหลือเป็นสัน
+            # ค้างอยู่ (วัดได้ว่าความแกว่งของหน้าตัดเท้าพุ่งจาก 42 เป็น 72)
             zone = crest_zone if cfg.crest_sharp else np.zeros_like(crest_zone)
             if ext is not None:
-                zone = zone | ext.zone
+                hand_zone = ext.zone & ext.hand_rows[:, None]
+                foot_zone = ext.zone & ext.foot_rows[:, None]
+                zone = zone | hand_zone
+                if foot_zone.any():
+                    blurred = _blend_detail_blur(
+                        field, blurred, foot_zone, cfg, "เท้า",
+                        sigma=cfg.foot_blur)
             blurred = _blend_detail_blur(field, blurred, zone, cfg,
-                                         "มือ/เท้า/สันหนาม")
+                                         "มือ/สันหนาม")
         field = blurred
 
     # ปิดผิวกริดให้เป็น 0 เพื่อให้ marching cubes ได้ mesh ปิดสนิททุกด้าน

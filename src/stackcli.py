@@ -40,7 +40,7 @@ import numpy as np
 
 from . import animation, basefit, clipmaterial, cliptexture, landmarks
 from . import export as export_mod
-from . import meshing, soleplan, stackviews, texture, uvmap, visual_hull
+from . import meshing, soleplan, stackviews, texture, topplan, uvmap, visual_hull
 from .config import BLENDER_EXE, INPUT_DIR, OUTPUT_DIR, PipelineConfig
 
 log = logging.getLogger("2Dto3D.stack")
@@ -284,7 +284,8 @@ def run(a: argparse.Namespace) -> int:
     banner(2, total, "เฉือน visual hull ด้วยเงาเสียงข้างมาก")
     carve_views = stackviews.carving_views(layers, masks)
     sole = soleplan.load(layers[stackviews.REFERENCE].folder, cfg)
-    grid = visual_hull.carve(carve_views, cfg, sole)
+    top = topplan.load(layers[stackviews.REFERENCE].folder, cfg)
+    grid = visual_hull.carve(carve_views, cfg, sole, top)
     for note in visual_hull.carve_report(grid, carve_views):
         log.warning("คุณภาพ hull: %s", note)
         warnings.append(note)

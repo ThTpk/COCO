@@ -338,10 +338,46 @@ def trace_arms(front: np.ndarray, cfg: PipelineConfig | None,
     return out
 
 
+def _without_tail(solid: np.ndarray, grid: HullGrid) -> np.ndarray:
+    """คืน occupancy ที่เอาท่อหางออกแล้ว — ใช้วิเคราะห์ลำตัวกับขา
+
+    ``carve`` ปั้นหางเป็นทรงกลมเรียงตาม ``grid.tail_path`` อยู่แล้ว จึงสร้าง
+    ก้อนเดิมขึ้นมาใหม่แล้วลบออกได้ตรง ๆ ไม่ต้องเดาว่าตรงไหนคือหาง
+    """
+    if grid.tail_path is None or grid.tail_radius is None:
+        return solid
+    ny, nx, nz = solid.shape
+    tube = np.zeros_like(solid)
+    for (ix, iy, iz), r in zip(grid.tail_path, grid.tail_radius):
+        r = float(r)
+        y0, y1 = max(0, int(iy - r)), min(ny, int(iy + r) + 1)
+        x0, x1 = max(0, int(ix - r)), min(nx, int(ix + r) + 1)
+        z0, z1 = max(0, int(iz - r)), min(nz, int(iz + r) + 1)
+        if y0 >= y1 or x0 >= x1 or z0 >= z1:
+            continue
+        gy = (np.arange(y0, y1, dtype=np.float32) - iy) ** 2
+        gx = (np.arange(x0, x1, dtype=np.float32) - ix) ** 2
+        gz = (np.arange(z0, z1, dtype=np.float32) - iz) ** 2
+        tube[y0:y1, x0:x1, z0:z1] |= (gy[:, None, None] + gx[None, :, None]
+                                      + gz[None, None, :]) <= r * r
+    out = solid & ~tube
+    if not out.any():
+        return solid
+    return out
+
+
 def estimate(grid: HullGrid, cfg: PipelineConfig | None = None) -> Skeleton:
     """อ่านตำแหน่งข้อต่อจากกริด occupancy"""
-    solid = grid.occupancy > 0.5
-    ny, nx, nz = solid.shape
+    solid_all = grid.occupancy > 0.5
+    ny, nx, nz = solid_all.shape
+
+    # หักท่อหางออกก่อนวิเคราะห์ลำตัวกับขา
+    #
+    # หางพาดผ่านระดับน่องและสะโพก ถ้าไม่หักออก ตำแหน่ง X ของขาจะถูกดึงออกข้าง
+    # และ `_z_center` จะได้ความลึกของหางมาแทนของขา (วัดได้ว่าเข่าไปอยู่ที่
+    # x=+0.25 ขณะที่สะโพกอยู่ที่ +0.11 และ z ถอยหลังจาก +0.13 เป็น -0.12)
+    # ขั้น carve รู้อยู่แล้วว่าหางอยู่ตรงไหน เพราะมันปั้นหางเองกับมือ
+    solid = _without_tail(solid_all, grid)
     front = solid.any(axis=2)                       # (ny, nx) silhouette ด้านหน้า
 
     rows_with_body = np.flatnonzero(front.any(axis=1))
@@ -386,14 +422,33 @@ def estimate(grid: HullGrid, cfg: PipelineConfig | None = None) -> Skeleton:
     if split_frac is not None and 0.38 <= split_frac <= 0.58:
         crotch_y = split_y
     else:
-        hip_y = _widest_central_row(front, body_cx_probe, at(0.30), at(0.62), min_run)
-        crotch_y = int(np.clip(hip_y - 0.05 * H, at(0.40), at(0.54)))
+        # ทางเลือกสำรอง: ยึดกับ *แนวคาง* ไม่ใช่ "แถวที่กว้างที่สุด"
+        #
+        # กฎแถวกว้างสุดตั้งอยู่บนสมมติฐานว่าเชิงกรานผายกว้างกว่าเอว ซึ่งจริง
+        # กับคนเปลือย แต่ตัวละครที่ใส่กางเกงหลวมจะกว้างขึ้นเรื่อย ๆ ลงไปถึง
+        # ต้นขา แถวกว้างสุดจึงไปตกที่ *ต้นขา* แล้วข้อสะโพกถูกดันลงไปชนเพดาน
+        # ล่างของ clip (วัดได้ว่าแถวกว้างสุดอยู่ที่ 36% แล้วได้สะโพก 40%
+        # ทั้งที่ขาแยกจริงตั้งแต่ 30%)
+        #
+        # แนวคางเป็นของที่ขั้น carve วัดได้จากโปรไฟล์ความลึกและไม่ขึ้นกับ
+        # เสื้อผ้าช่วงล่างเลย สัดส่วน สะโพก/คาง ของมนุษย์อยู่ราว 0.60
+        chin = getattr(grid, "chin_row", None)
+        ratio = float(getattr(cfg, "hip_chin_ratio", 0.60)) if cfg else 0.60
+        if chin is not None and chin > y_foot:
+            crotch_y = int(np.clip(y_foot + ratio * (chin - y_foot),
+                                   at(0.42), at(0.56)))
+            how = f"วางข้อสะโพกที่ {ratio:.2f} ของแนวคาง"
+        else:
+            hip_y = _widest_central_row(front, body_cx_probe,
+                                        at(0.30), at(0.62), min_run)
+            crotch_y = int(np.clip(hip_y - 0.05 * H, at(0.40), at(0.54)))
+            how = "วางข้อสะโพกจากตำแหน่งที่สะโพกผายกว้างสุดแทน"
         if split_frac is None:
-            notes.append("หาจุดที่ขาแยกไม่เจอเลย — ใช้ตำแหน่งที่สะโพกผายกว้างสุดแทน")
+            notes.append(f"หาจุดที่ขาแยกไม่เจอเลย — {how}")
         else:
             notes.append(
                 f"ขาเริ่มแยกที่ {split_frac:.0%} ของความสูง ซึ่งต่ำกว่าข้อสะโพกตามสัดส่วนร่างกาย "
-                "(ต้นขาชิดกันหรือใส่กางเกงหลวม) — วางข้อสะโพกจากตำแหน่งที่สะโพกผายกว้างสุดแทน"
+                f"(ต้นขาชิดกันหรือใส่กางเกงหลวม) — {how}"
             )
     log.info("หว่างขาอยู่ที่ %.0f%% ของความสูง", 100 * (crotch_y - y_foot) / H)
 
@@ -436,7 +491,18 @@ def estimate(grid: HullGrid, cfg: PipelineConfig | None = None) -> Skeleton:
     neck_lo = max(shoulder_y + max(2, int(0.02 * H)), at(0.76))
     neck_hi = min(y_head - max(2, int(0.06 * H)), at(0.90))
     neck_y = at(0.85)
-    if neck_hi > neck_lo:
+
+    # แนวคางที่ขั้น carve หาไว้เชื่อถือได้กว่ากฎ "ลำตัวคอดตรงคอ"
+    #
+    # หัวสัตว์ปากยาวไม่คอดตรงคอ ปากยื่นไปข้างหน้าแทน กฎความกว้างจึงหาไม่เจอ
+    # แล้วไปวางคอที่เพดานบนของช่วงที่เป็นไปได้ (90% ของความสูง) ซึ่งสูงเกินจริง
+    # ส่วน carve วัดแนวคางจาก *โปรไฟล์ความลึก* ของมุมข้าง ซึ่งเห็นคางชัด
+    chin = getattr(grid, "chin_row", None)
+    if chin is not None and neck_lo <= chin <= neck_hi:
+        neck_y = int(chin)
+        notes.append(f"วางคอที่แนวคางซึ่งขั้น carve วัดไว้ "
+                     f"({100 * (chin - y_foot) / H:.0f}% ของความสูง)")
+    elif neck_hi > neck_lo:
         best_w = np.inf
         for y in range(neck_lo, neck_hi + 1):
             run = _central_run(front[y], body_cx_probe, min_run)

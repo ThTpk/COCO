@@ -7,10 +7,8 @@ __pycache__/
 # --- ผลลัพธ์ที่ pipeline สร้างเอง -------------------------------------------
 # ไม่เก็บของที่รันใหม่ได้ ยกเว้นไฟล์เดียวที่หน้าเว็บต้องใช้ (ดูข้อยกเว้นข้างล่าง)
 output/*
-!output/character_rigged.glb
-!output/character2_rigged.glb
-!output/character3_rigged.glb
-!output/character4_rigged.glb
+# โมเดลเดียวที่เผยแพร่บนเว็บ
+!output/character5_rigged.glb
 
 # ภาพตรวจงานระหว่างทาง สร้างใหม่ได้ทุกเมื่อด้วย --debug
 output/debug/

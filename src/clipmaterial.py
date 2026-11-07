@@ -32,6 +32,9 @@ import numpy as np
 
 log = logging.getLogger(__name__)
 
+#: seed ของ RNG ใน OpenCV ให้ผลซ้ำได้ (เหตุผลเดียวกับ tailtrace)
+KMEANS_SEED = 1234
+
 
 @dataclass(frozen=True)
 class Material:
@@ -106,6 +109,7 @@ def classify(texture: np.ndarray, filled: np.ndarray, clusters: int = 7,
     lab = cv2.cvtColor(px.reshape(-1, 1, 3).astype(np.uint8),
                        cv2.COLOR_RGB2LAB).reshape(-1, 3).astype(np.float32)
     crit = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 24, 1.0)
+    cv2.setRNGSeed(KMEANS_SEED)   # ดูเหตุผลใน tailtrace._colour_clusters
     _, idx, _ = cv2.kmeans(lab, clusters, None, crit, 3,
                            cv2.KMEANS_PP_CENTERS)
     idx = idx.ravel()

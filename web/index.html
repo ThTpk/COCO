@@ -77,9 +77,9 @@
 
 <div id="pick">โมเดล
   <button data-m="">ภาพนิ่ง</button>
-  <button data-m="../output/character2_rigged.glb">คลิป</button>
-  <button data-m="../output/character3_rigged.glb">คลิป+ภาพนิ่ง</button>
-  <button data-m="../output/character4_rigged.glb">สี่ชั้น</button>
+  <button data-m="../output/character5_rigged.glb">คลิป</button>
+  <button data-m="../output/character5_rigged.glb">คลิป+ภาพนิ่ง</button>
+  <button data-m="../output/character5_rigged.glb">สี่ชั้น</button>
 </div>
 
 <div id="stat">—</div>
@@ -99,14 +99,14 @@ import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 
 const MODEL = new URLSearchParams(location.search).get('model')
-            || '../output/character_rigged.glb';
+            || '../output/character5_rigged.glb';
 
 // ---------- ปุ่มสลับโมเดล -------------------------------------------------
 // สลับด้วยการโหลดหน้าใหม่พร้อม ?model= แทนการสับโมเดลกลางเกม เพราะตัวละคร
 // ผูกอยู่กับทั้ง mixer, clip, และสถานะการเดิน การรื้อทั้งหมดกลางคันมีแต่จะ
 // พังเงียบ ๆ ส่วนการโหลดใหม่เสียแค่ตำแหน่งที่ยืนอยู่
 for (const b of document.querySelectorAll('#pick button')) {
-  b.classList.toggle('on', (b.dataset.m || '../output/character_rigged.glb') === MODEL);
+  b.classList.toggle('on', (b.dataset.m || '../output/character5_rigged.glb') === MODEL);
   b.onclick = () => {
     const u = new URL(location.href);
     if (b.dataset.m) u.searchParams.set('model', b.dataset.m);

@@ -23,6 +23,9 @@ from .preprocess import PreparedView
 
 log = logging.getLogger(__name__)
 
+#: seed ของ RNG ใน OpenCV — ดูเหตุผลใน _colour_clusters
+KMEANS_SEED = 1234
+
 
 @dataclass
 class TailTrace:
@@ -62,6 +65,11 @@ def _colour_clusters(rgb: np.ndarray, band: np.ndarray, k: int = 2) -> list[np.n
         return []
 
     crit = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 20, 0.5)
+    # ตรึง RNG ก่อนทุกครั้ง: cv2.kmeans สุ่มจุดตั้งต้นจาก RNG ของ OpenCV ถ้า
+    # ปล่อยไว้ รันซ้ำด้วย input เดียวกันจะได้คลัสเตอร์คนละแบบ แล้วหางที่แยก
+    # ได้ก็ต่างกันทุกครั้ง (วัดได้ว่าปริมาตรหางแกว่าง 4,600-12,600 voxel กับ
+    # ภาพชุดเดิม) ซึ่งทำให้เทียบผลของ parameter ใด ๆ ไม่ได้เลย
+    cv2.setRNGSeed(KMEANS_SEED)
     _, labels, _ = cv2.kmeans(pts, k, None, crit, 3, cv2.KMEANS_PP_CENTERS)
 
     out = []

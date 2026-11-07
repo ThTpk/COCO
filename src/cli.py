@@ -115,6 +115,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="ไม่ต้องกันเขตเท้าออกจากกฎเกลาผิวของลำตัว")
     g.add_argument("--no-sole-plan", action="store_true",
                    help="ไม่ใช้ภาพมุมล่าง (down/sole/bottom) เป็นผังฝ่าเท้า")
+    g.add_argument("--no-top-plan", action="store_true",
+                   help="ไม่ใช้ภาพมุมบน (top/up) บอกความลึกของหาง")
     g.add_argument("--detail-blur", type=float, default=d.detail_blur,
                    help="เบลอเขตมือ/เท้าด้วย sigma เท่านี้ (ลำตัวใช้ --hull-blur)")
     g.add_argument("--palm-round", type=float, default=d.palm_round,
@@ -214,9 +216,11 @@ def run(a: argparse.Namespace) -> int:
     banner(2, total, "Visual hull: ตัด voxel ด้วย silhouette")
     # ภาพมุมล่าง (ถ้ามี) ไม่เข้า visual hull เพราะเป็นภาพ perspective
     # ใช้เป็นผังฝ่าเท้าอย่างเดียว ดูเหตุผลใน soleplan.py
-    from . import soleplan
+    from . import soleplan, topplan
     sole_plans = soleplan.load(a.input, cfg)
-    grid = visual_hull.carve(views, cfg, sole_plans)
+    # ภาพมุมบนให้ระนาบ X-Z ซึ่งเป็นที่เดียวที่บอก *ความลึก* ของหางได้
+    top = None if a.no_top_plan else topplan.load(a.input, cfg)
+    grid = visual_hull.carve(views, cfg, sole_plans, top)
     for note in visual_hull.carve_report(grid, views):
         log.warning("คุณภาพ hull: %s", note)
         warnings.append(note)
