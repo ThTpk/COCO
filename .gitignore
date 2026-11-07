@@ -10,6 +10,7 @@ output/*
 !output/character_rigged.glb
 !output/character2_rigged.glb
 !output/character3_rigged.glb
+!output/character4_rigged.glb
 
 # ภาพตรวจงานระหว่างทาง สร้างใหม่ได้ทุกเมื่อด้วย --debug
 output/debug/

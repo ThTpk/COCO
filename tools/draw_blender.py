@@ -189,7 +189,10 @@ def main(argv: list[str] | None = None) -> int:
     run_blender(a, found, script, out_dir)
 
     for tag, cols in (("turn", a.cols), ("clay", a.cols)):
-        shots = sorted(out_dir.glob(f"{tag}_*.png"))
+        # กัน contact sheet ของรอบก่อนไม่ให้ถูกนับเป็นภาพเรนเดอร์ของรอบนี้
+        # (ชื่อ clay_sheet.png เข้าแพตเทิร์น clay_*.png ของตัวเองพอดี)
+        shots = [p for p in sorted(out_dir.glob(f"{tag}_*.png"))
+                 if not p.stem.endswith("_sheet")]
         if not shots:
             continue
         sheet = contact_sheet(shots, out_dir / f"{tag}_sheet.png", cols)
