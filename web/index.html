@@ -24,6 +24,15 @@
           background: #151922cc; border: 1px solid #262c36; border-radius: 10px;
           font: 12px/1.6 ui-monospace, monospace; color: #8b94a3; text-align: right; }
 
+  #pick { position: fixed; top: 14px; left: 50%; transform: translateX(-50%);
+          display: flex; align-items: center; gap: 6px; padding: 7px 10px;
+          background: #151922cc; border: 1px solid #262c36; border-radius: 10px;
+          backdrop-filter: blur(8px); font-size: 12px; color: #9aa4b2; }
+  #pick button { background: #222934; color: #e8eaed; border: 1px solid #39414f;
+                 border-radius: 6px; padding: 4px 10px; font-size: 12px; cursor: pointer; }
+  #pick button:hover { background: #2a323e; }
+  #pick button.on { background: #27405c; border-color: #4da3ff; color: #fff; }
+
   #load { position: fixed; inset: 0; display: grid; place-items: center;
           background: #0b0d10; font-size: 14px; color: #8b94a3; z-index: 5; }
   #load.gone { display: none; }
@@ -66,6 +75,11 @@
   <p>ลากเมาส์ — หมุนกล้อง · สกรอลล์ — ซูม</p>
 </div>
 
+<div id="pick">โมเดล
+  <button data-m="">ภาพนิ่ง</button>
+  <button data-m="../output/character2_rigged.glb">คลิป</button>
+</div>
+
 <div id="stat">—</div>
 <div id="load">กำลังโหลดโมเดล…</div>
 <div id="err"><div></div></div>
@@ -84,6 +98,20 @@ import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 
 const MODEL = new URLSearchParams(location.search).get('model')
             || '../output/character_rigged.glb';
+
+// ---------- ปุ่มสลับโมเดล -------------------------------------------------
+// สลับด้วยการโหลดหน้าใหม่พร้อม ?model= แทนการสับโมเดลกลางเกม เพราะตัวละคร
+// ผูกอยู่กับทั้ง mixer, clip, และสถานะการเดิน การรื้อทั้งหมดกลางคันมีแต่จะ
+// พังเงียบ ๆ ส่วนการโหลดใหม่เสียแค่ตำแหน่งที่ยืนอยู่
+for (const b of document.querySelectorAll('#pick button')) {
+  b.classList.toggle('on', (b.dataset.m || '../output/character_rigged.glb') === MODEL);
+  b.onclick = () => {
+    const u = new URL(location.href);
+    if (b.dataset.m) u.searchParams.set('model', b.dataset.m);
+    else u.searchParams.delete('model');
+    location.href = u;
+  };
+}
 
 // ความเร็วเดินตั้งให้พอดีกับจังหวะก้าวของ clip Walk
 // clip ยาว 32 เฟรม @24fps = 1.33 วิ ต่อหนึ่งรอบ (สองก้าว) ตัวละครสูง 2.1 ม.

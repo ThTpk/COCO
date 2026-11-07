@@ -20,6 +20,7 @@
   select, button { background: #222730; color: #e8eaed; border: 1px solid #343b46;
                    border-radius: 6px; padding: 5px 9px; font-size: 13px; cursor: pointer; }
   button:hover, select:hover { background: #2a303a; }
+  button.on { background: #27405c; border-color: #4da3ff; color: #fff; }
   input[type=range] { flex: 1; accent-color: #4da3ff; }
   #stats { margin-top: 14px; padding-top: 12px; border-top: 1px solid #2a2f37;
            font-size: 12px; color: #8b94a3; white-space: pre-line; }
@@ -43,6 +44,10 @@
 <div id="panel">
   <h1>2Dto3D</h1>
   <p class="sub">ลากไฟล์ .glb มาวางเพื่อเปิดดู</p>
+
+  <div class="row"><label>โมเดล</label>
+    <button id="m1" title="สร้างจากภาพนิ่ง 4 มุมใน input/">ภาพนิ่ง</button>
+    <button id="m2" title="สร้างจากคลิปกล้องวนรอบตัว (input/clip.mp4)">คลิป</button></div>
 
   <div class="row"><label for="file">เปิดไฟล์</label>
     <input id="file" type="file" accept=".glb,.gltf" hidden>
@@ -300,7 +305,7 @@ $('bones').onchange = () => { if (skeletonHelper) skeletonHelper.visible = $('bo
 $('speed').oninput  = () => { if (mixer) mixer.timeScale = +$('speed').value; };
 $('file').onchange  = e => {
   const f = e.target.files[0];
-  if (f) load(URL.createObjectURL(f), true);
+  if (f) { markActive(null); load(URL.createObjectURL(f), true); }
 };
 
 // ลากไฟล์มาวาง
@@ -311,7 +316,7 @@ addEventListener('drop', e => {
   e.preventDefault();
   drop.classList.remove('on');
   const f = e.dataTransfer.files[0];
-  if (f) load(URL.createObjectURL(f), true);
+  if (f) { markActive(null); load(URL.createObjectURL(f), true); }
 });
 
 addEventListener('resize', () => {
@@ -328,12 +333,60 @@ renderer.setAnimationLoop(() => {
   renderer.render(scene, camera);
 });
 
-// โหลดไฟล์จาก ?model=... หรือไม่ก็ผลลัพธ์ล่าสุด (เงียบ ๆ ถ้ายังไม่มีไฟล์)
-const wanted = new URLSearchParams(location.search).get('model')
-             || '../output/character.glb';
-fetch(wanted, { method: 'HEAD' })
-  .then(r => { if (r.ok) load(wanted); })
-  .catch(() => {});
+// ---- สลับโมเดล ----------------------------------------------------------
+//
+// โปรเจกต์นี้มีสองเส้นทางที่ให้ตัวละครคนเดียวกันคนละตัว: จากภาพนิ่ง 4 มุม
+// กับจากคลิปกล้องวนรอบ การสลับไปมาคือวิธีเทียบผลที่เร็วที่สุด
+//
+// ในแต่ละเส้นทางเอาไฟล์ที่ rig แล้วก่อน เพราะมีอนิเมชันให้ดูด้วย ถ้ายังไม่ได้
+// rig ก็ถอยไปใช้ไฟล์ mesh เปล่า — คนที่เพิ่งรัน --rig none จะได้ยังเห็นผลงาน
+const MODELS = {
+  m1: { name: 'จากภาพนิ่ง',
+        files: ['../output/character_rigged.glb', '../output/character.glb'] },
+  m2: { name: 'จากคลิป',
+        files: ['../output/character2_rigged.glb', '../output/character2.glb'] },
+};
+
+const exists = url => fetch(url, { method: 'HEAD' })
+  .then(r => r.ok).catch(() => false);
+
+async function firstAvailable(urls) {
+  for (const u of urls) if (await exists(u)) return u;
+  return null;
+}
+
+function markActive(key) {
+  for (const k of Object.keys(MODELS)) $(k).classList.toggle('on', k === key);
+}
+
+async function loadModel(key, quiet = false) {
+  const url = await firstAvailable(MODELS[key].files);
+  if (!url) {
+    if (!quiet) err(`ยังไม่มีไฟล์โมเดล${MODELS[key].name} — ` +
+                    `รัน pipeline ให้ได้ ${MODELS[key].files[1]} ก่อน`);
+    return false;
+  }
+  markActive(key);
+  load(url);
+  return true;
+}
+
+for (const k of Object.keys(MODELS)) $(k).onclick = () => loadModel(k);
+
+// โหลดไฟล์จาก ?model=... หรือไม่ก็ตัวแรกที่มีอยู่จริง (เงียบ ๆ ถ้ายังไม่มีสักไฟล์)
+(async () => {
+  const wanted = new URLSearchParams(location.search).get('model');
+  if (wanted) {
+    if (await exists(wanted)) {
+      // ถ้า URL ชี้ไปที่ไฟล์ของเส้นทางไหน ก็ให้ปุ่มนั้นติดไว้ด้วย
+      const key = Object.keys(MODELS).find(k => MODELS[k].files.includes(wanted));
+      if (key) markActive(key);
+      load(wanted);
+    }
+    return;
+  }
+  for (const k of Object.keys(MODELS)) if (await loadModel(k, true)) return;
+})();
 </script>
 </body>
 </html>
