@@ -15,6 +15,7 @@ r"""ฉายสีจากเฟรมของคลิปลงบนผิ�
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 
 import cv2
 import numpy as np
@@ -25,6 +26,15 @@ from .turntable import Camera, ClipFrame
 from .visual_hull import HullGrid
 
 log = logging.getLogger(__name__)
+
+
+@dataclass
+class Baked:
+    """ผลของการ bake หนึ่งครั้ง"""
+
+    color: np.ndarray                 # (S, S, 3) uint8
+    normal: np.ndarray | None         # (S, S, 3) uint8 หรือ None
+    filled: np.ndarray                # (S, S) bool — texel ที่มีเนื้อจริง
 
 
 def _bilinear(img: np.ndarray, rows: np.ndarray, cols: np.ndarray) -> np.ndarray:
@@ -209,9 +219,8 @@ def _voxel_to_world(points_vox: np.ndarray, grid: HullGrid,
 
 def bake(mesh: MeshData, grid: HullGrid, axes: tuple, frames: list[ClipFrame],
          cams: list[Camera], cfg: PipelineConfig, blend: float = 6.0,
-         occlusion: bool = True, normal_strength: float = 0.0,
-         ) -> tuple[np.ndarray, np.ndarray | None]:
-    """คลี่ผิวแล้ว bake สีจากคลิปลง texture — คืน (ภาพสี, normal map หรือ None)"""
+         occlusion: bool = True, normal_strength: float = 0.0) -> Baked:
+    """คลี่ผิวแล้ว bake สีจากคลิปลง texture"""
     from .uvmap import _rasterize, pad_islands
 
     size = int(cfg.uv_texture_size)
@@ -232,10 +241,8 @@ def bake(mesh: MeshData, grid: HullGrid, axes: tuple, frames: list[ClipFrame],
     img = pad_islands(img.reshape(size, size, 3), mask2d, cfg.uv_padding)
     log.info("bake texture %dx%d เสร็จ", size, size)
 
-    nrm = None
-    if normal_strength > 0:
-        nrm = normal_map(img, mask2d, normal_strength)
-    return img, nrm
+    nrm = normal_map(img, mask2d, normal_strength) if normal_strength > 0 else None
+    return Baked(color=img, normal=nrm, filled=mask2d)
 
 
 def normal_map(texture: np.ndarray, filled: np.ndarray, strength: float = 1.0,
@@ -273,17 +280,25 @@ def normal_map(texture: np.ndarray, filled: np.ndarray, strength: float = 1.0,
     packed = pad_islands(np.dstack([packed] * 3), filled, 8)[:, :, 0]
     h = (packed.astype(np.float32) - 128.0) / 127.0
 
+    out = normal_from_height(h, flip_green)
+    log.info("สร้าง normal map %dx%d (strength %.2f)",
+             out.shape[1], out.shape[0], strength)
+    return out
+
+
+def normal_from_height(h: np.ndarray, flip_green: bool = False) -> np.ndarray:
+    """แปลงสนามความสูงเป็น normal map (tangent space ตามแบบ glTF/OpenGL)
+
+    ที่มา: ผิวคือ P + h*N ดังนั้น dP/du = T + (dh/du)N และ dP/dv = B + (dh/dv)N
+    normal ใหม่คือ cross ของสองตัวนี้ = N - (dh/du)T - (dh/dv)B  ส่วนที่กลับ
+    เครื่องหมายของแกนเขียว เพราะ glTF เก็บแกน Y ชี้ *ขึ้น* ในภาพ ขณะที่แถวของ
+    ภาพวิ่งลง
+    """
     gx = cv2.Scharr(h, cv2.CV_32F, 1, 0) / 16.0
     gy = cv2.Scharr(h, cv2.CV_32F, 0, 1) / 16.0
-    nz = np.ones_like(gx)
-    vec = np.dstack([-gx, gy if not flip_green else -gy, nz])
+    vec = np.dstack([-gx, -gy if flip_green else gy, np.ones_like(gx)])
     vec /= np.linalg.norm(vec, axis=2, keepdims=True)
-
-    out = np.clip(vec * 127.5 + 127.5, 0, 255).astype(np.uint8)
-    log.info("สร้าง normal map %dx%d (strength %.2f, ความชันสูงสุด %.2f)",
-             out.shape[1], out.shape[0], strength,
-             float(np.abs(np.dstack([gx, gy])).max()))
-    return out
+    return np.clip(vec * 127.5 + 127.5, 0, 255).astype(np.uint8)
 
 
 def vertex_colors(mesh: MeshData, grid: HullGrid, axes: tuple,

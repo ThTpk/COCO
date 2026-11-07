@@ -22,6 +22,7 @@ def build_trimesh(
     mesh: MeshData,
     texture: np.ndarray | None = None,
     normal: np.ndarray | None = None,
+    rough: np.ndarray | None = None,
 ) -> trimesh.Trimesh:
     """ประกอบเป็น trimesh พร้อมสี — ใช้ texture ถ้ามี ไม่งั้นใช้ vertex color
 
@@ -54,6 +55,13 @@ def build_trimesh(
             # เปลี่ยนอะไรเลย ต้องเหลือความมันไว้บ้าง ร่องเกล็ดกับรอยยับผ้า
             # ถึงจะมีไฮไลต์วิ่งให้เห็นว่าผิวไม่ได้เรียบ
             roughness = 0.7
+        if rough is not None:
+            # glTF เก็บ roughness ไว้ในช่องเขียว metallic ในช่องน้ำเงิน และ
+            # *คูณ* กับ factor ทั้งสองตัว จึงต้องตั้ง factor เป็น 1 ไม่งั้นภาพ
+            # ที่ส่งไปจะถูกคูณให้หายไปเฉย ๆ
+            extra["metallicRoughnessTexture"] = Image.fromarray(
+                np.ascontiguousarray(rough[::-1]))
+            roughness = 1.0
         material = trimesh.visual.material.PBRMaterial(
             name="character",
             baseColorTexture=Image.fromarray(
@@ -90,10 +98,11 @@ def export(
     formats: tuple[str, ...] = ("glb",),
     texture: np.ndarray | None = None,
     normal: np.ndarray | None = None,
+    rough: np.ndarray | None = None,
 ) -> dict[str, Path]:
     """เขียนไฟล์ตามฟอร์แมตที่ขอ คืน dict ของ {ฟอร์แมต: path}"""
     out_dir.mkdir(parents=True, exist_ok=True)
-    tm = build_trimesh(verts_world, mesh, texture, normal)
+    tm = build_trimesh(verts_world, mesh, texture, normal, rough)
 
     # บังคับให้คำนวณ vertex normal ไว้ก่อน แล้วสั่ง exporter ให้เขียนลงไฟล์ด้วย
     #
@@ -146,8 +155,11 @@ def recompress_textures(path: Path, quality: int, max_size: int = 0) -> dict:
     # (เก็บเป็น PNG ไปเลยก็ได้ แต่ 2048x2048 กิน 6 MB ซึ่งหนักเกินไปสำหรับเว็บ)
     keep = set()
     for m in g.materials or []:
-        if m.normalTexture is not None and m.normalTexture.index is not None:
-            keep.add(g.textures[m.normalTexture.index].source)
+        for tex in (m.normalTexture,
+                    (m.pbrMetallicRoughness or None)
+                    and m.pbrMetallicRoughness.metallicRoughnessTexture):
+            if tex is not None and tex.index is not None:
+                keep.add(g.textures[tex.index].source)
 
     changed = 0
     for i, im in enumerate(g.images):
@@ -160,7 +172,7 @@ def recompress_textures(path: Path, quality: int, max_size: int = 0) -> dict:
 
         buf = io.BytesIO()
         img.save(buf, format="JPEG",
-                 quality=min(97, quality + 12) if i in keep else quality,
+                 quality=min(94, quality + 6) if i in keep else quality,
                  optimize=True, progressive=True, subsampling=0)
         new = buf.getvalue()
         if len(new) >= len(raw):

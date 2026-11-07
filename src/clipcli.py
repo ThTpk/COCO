@@ -27,7 +27,8 @@ from pathlib import Path
 
 import numpy as np
 
-from . import clipcarve, cliptexture, clipviews, meshing, turntable, uvmap
+from . import (clipcarve, clipmaterial, cliptexture, clipviews, meshing,
+               turntable, uvmap)
 from .cli import _Fmt, banner, setup_logging
 from .config import INPUT_DIR, OUTPUT_DIR, PipelineConfig
 
@@ -94,6 +95,12 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--normal-strength", type=float, default=1.0,
                    help="ความแรงของ normal map ที่สร้างจากลายบน texture "
                         "(0 = ไม่ต้องสร้าง) สูงเกินผิวจะดูเป็นรอยบุบ")
+    g.add_argument("--no-materials", action="store_true",
+                   help="ไม่ต้องแยกวัสดุแล้วใส่ลายเกล็ด/ผ้า/หนัง กับความมันของแต่ละวัสดุ")
+    g.add_argument("--detail-scale", type=float, default=1.0,
+                   help="ตัวคูณขนาดลายวัสดุ (เล็กลง = เกล็ดถี่ขึ้น)")
+    g.add_argument("--detail-strength", type=float, default=0.35,
+                   help="ความลึกของลายวัสดุที่สังเคราะห์ขึ้น")
     g.add_argument("--no-occlusion", action="store_true",
                    help="ไม่ต้องตรวจว่าจุดบนผิวถูกแขน/หางบังในมุมนั้นหรือไม่")
     g.add_argument("--rig", choices=["none", "blender"], default="none")
@@ -185,14 +192,29 @@ def run_hull(a, cfg, frames, sol, out_dir: Path) -> int:
     tex_pick = _even_angles(sol.cams, max(a.texture_views, a.views))
     TF = [frames[i] for i in tex_pick]
     TC = [sol.cams[i] for i in tex_pick]
-    tex_img = nrm_img = None
+    tex_img = nrm_img = rough_img = None
     if cfg.texture_mode == "uv":
         mesh = uvmap.unwrap(mesh, cfg)
-        tex_img, nrm_img = cliptexture.bake(
+        baked = cliptexture.bake(
             mesh, grid, axes, TF, TC, cfg, blend=a.texture_blend,
             occlusion=not a.no_occlusion, normal_strength=a.normal_strength)
+        tex_img, nrm_img = baked.color, baked.normal
+
+        if not a.no_materials:
+            banner(5, 6, "แยกวัสดุจากลาย แล้วใส่ลายผิวของวัสดุนั้น")
+            labels = clipmaterial.classify(baked.color, baked.filled)
+            detail = clipmaterial.detail_height(labels, scale=a.detail_scale)
+            rough_img = clipmaterial.roughness_map(labels, detail)
+            dn = cliptexture.normal_from_height(detail * a.detail_strength)
+            nrm_img = dn if nrm_img is None else                 clipmaterial.combine_normals(nrm_img, dn)
+            if cfg.debug:
+                clipmaterial.debug_sheet(
+                    baked.color, labels, detail,
+                    out_dir / "debug" / "06_materials.png")
+
         import cv2
-        for img, suffix in ((tex_img, "texture"), (nrm_img, "normal")):
+        for img, suffix in ((tex_img, "texture"), (nrm_img, "normal"),
+                            (rough_img, "rough")):
             if img is None:
                 continue
             path = out_dir / f"{a.name}_{suffix}.png"
@@ -221,7 +243,7 @@ def run_hull(a, cfg, frames, sol, out_dir: Path) -> int:
 
     written = export_mod.export(verts_world, mesh, out_dir, a.name,
                                 cfg.export_formats, texture=tex_img,
-                                normal=nrm_img)
+                                normal=nrm_img, rough=rough_img)
     if cfg.texture_quality > 0:
         for p in written.values():
             if p.suffix.lower() == ".glb":
