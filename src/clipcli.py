@@ -88,6 +88,11 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--texture-mode", choices=["uv", "vertex"], default=d.texture_mode)
     g.add_argument("--texture-views", type=int, default=48,
                    help="จำนวนเฟรมที่เอามาฉายสี (มากกว่าตอนเฉือนได้ ไม่เสียรูปทรง)")
+    g.add_argument("--texture-blend", type=float, default=6.0,
+                   help="ยิ่งมากยิ่งคม: 0 = เฉลี่ยสองมุมที่ดีที่สุดเท่า ๆ กัน, "
+                        "สูง = ใช้มุมที่ดีที่สุดมุมเดียวเกือบตลอด")
+    g.add_argument("--no-occlusion", action="store_true",
+                   help="ไม่ต้องตรวจว่าจุดบนผิวถูกแขน/หางบังในมุมนั้นหรือไม่")
     g.add_argument("--rig", choices=["none", "blender"], default="none")
     g.add_argument("--no-anim", action="store_true", help="rig อย่างเดียว ไม่ใส่อนิเมชัน")
     g.add_argument("--formats", default="glb")
@@ -180,7 +185,9 @@ def run_hull(a, cfg, frames, sol, out_dir: Path) -> int:
     tex_img = None
     if cfg.texture_mode == "uv":
         mesh = uvmap.unwrap(mesh, cfg)
-        tex_img = cliptexture.bake(mesh, grid, axes, TF, TC, cfg)
+        tex_img = cliptexture.bake(mesh, grid, axes, TF, TC, cfg,
+                                   blend=a.texture_blend,
+                                   occlusion=not a.no_occlusion)
         import cv2
         tex_path = out_dir / f"{a.name}_texture.png"
         ok, buf = cv2.imencode(".png", tex_img[:, :, ::-1])
@@ -189,7 +196,9 @@ def run_hull(a, cfg, frames, sol, out_dir: Path) -> int:
             log.info("เขียน texture -> %s (%.2f MB)", tex_path,
                      tex_path.stat().st_size / 1e6)
     else:
-        mesh = cliptexture.vertex_colors(mesh, grid, axes, TF, TC, cfg)
+        mesh = cliptexture.vertex_colors(mesh, grid, axes, TF, TC, cfg,
+                                         blend=a.texture_blend,
+                                         occlusion=not a.no_occlusion)
 
     banner(6, 6, "ประเมินข้อต่อ แล้วเขียนไฟล์ผลลัพธ์")
     from . import export as export_mod
