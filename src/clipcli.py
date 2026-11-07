@@ -64,6 +64,19 @@ def build_parser() -> argparse.ArgumentParser:
                    help="จำนวนรอบที่ดัดมาตราส่วน/ตำแหน่งของแต่ละเฟรมให้เข้ากับ hull")
     g.add_argument("--rembg-model", default=d.rembg_model, help="โมเดลแยกพื้นหลัง")
 
+    g = p.add_argument_group("ภาพนิ่งเสริม")
+    g.add_argument("--stills", type=Path, default=None, metavar="DIR",
+                   help="โฟลเดอร์ภาพนิ่งสี่มุม (เช่น input) เอามาเป็นมุมเพิ่ม "
+                        "ตอนเฉือน voxel และตอนฉายสี — มุมอ่านจากภาพเอง "
+                        "ไม่ได้อ่านจากชื่อไฟล์")
+    g.add_argument("--stills-min-iou", type=float, default=0.55,
+                   help="ภาพนิ่งต้องทับเงาคลิปได้อย่างน้อยเท่านี้จึงจะเอามาใช้")
+    g.add_argument("--stills-only-above", type=float, default=0.85,
+                   metavar="FRAC",
+                   help="เหนือความสูงนี้ (สัดส่วนของตัว) ให้ภาพนิ่งเป็นคนตัดสิน"
+                        "รูปทรงแทนเฟรมคลิป — ช่วงหัวที่คลิปมักถ่ายไม่ติด "
+                        "(1.0 = ไม่ใช้กลไกนี้)")
+
     g = p.add_argument_group("รูปทรง (โหมด hull)")
     g.add_argument("--views", type=int, default=24,
                    help="จำนวนมุมที่เอามาเฉือน กระจายเท่า ๆ กันรอบตัว")
@@ -86,6 +99,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     g = p.add_argument_group("ผลลัพธ์")
     g.add_argument("--texture-size", type=int, default=d.uv_texture_size)
+    g.add_argument("--texture-glb-size", type=int, default=d.texture_glb_size,
+                   help="ย่อ texture ที่ฝังใน GLB ให้ไม่เกินกี่พิกเซล "
+                        "(0 = ไม่ย่อ) ไฟล์ PNG บนดิสก์ยังเป็นความละเอียดเต็ม "
+                        "— แผนที่ 4096 สามใบทำให้ GLB โตถึง 15 MB ซึ่งหนัก "
+                        "เกินไปสำหรับหน้าเว็บ")
     g.add_argument("--texture-mode", choices=["uv", "vertex"], default=d.texture_mode)
     g.add_argument("--texture-views", type=int, default=48,
                    help="จำนวนเฟรมที่เอามาฉายสี (มากกว่าตอนเฉือนได้ ไม่เสียรูปทรง)")
@@ -123,6 +141,7 @@ def _config(a: argparse.Namespace) -> PipelineConfig:
         rembg_model=a.rembg_model,
         texture_mode=a.texture_mode,
         uv_texture_size=a.texture_size,
+        texture_glb_size=a.texture_glb_size,
         draco=not a.no_draco,
         voxel_res=a.voxel_res,
         taubin_iters=a.smooth,
@@ -168,11 +187,28 @@ def solve_clip(a: argparse.Namespace, cfg: PipelineConfig, cache: Path):
     return frames, sol
 
 
-def run_hull(a, cfg, frames, sol, out_dir: Path) -> int:
+def run_hull(a, cfg, frames, sol, out_dir: Path, cache: Path) -> int:
     pick = _even_angles(sol.cams, a.views)
     F = [frames[i] for i in pick]
     C = [sol.cams[i] for i in pick]
     S = [sol.stats[i] for i in pick]
+
+    # ภาพนิ่งเข้ามาก่อนขั้น refine เพื่อให้ถูกดัดมาตราส่วนไปพร้อมกับเฟรมคลิป
+    # โดยมีเฟรมคลิปจำนวนมากกว่าเป็นตัวตรึงค่ากลางไว้
+    stills = []
+    if a.stills is not None:
+        banner(2, 6, "เสริมภาพนิ่งสี่มุมเข้ากับชุดมุมของคลิป")
+        from . import clipstills
+        stills = clipstills.build(a.stills, cache, frames, sol.cams, cfg,
+                                  min_iou=a.stills_min_iou)
+        if stills:
+            if cfg.debug:
+                clipstills.debug_sheet(stills, frames, sol.cams, cfg,
+                                       out_dir / "debug" / "07_stills.png")
+            F += [s.frame for s in stills]
+            C += [s.cam for s in stills]
+            S += [s.stats for s in stills]
+
     log.info("ใช้ %d มุมในการเฉือน: %s", len(C),
              ", ".join(f"{np.degrees(c.theta) % 360:.0f}°" for c in C[:12])
              + (" ..." if len(C) > 12 else ""))
@@ -186,10 +222,23 @@ def run_hull(a, cfg, frames, sol, out_dir: Path) -> int:
             C = clipcarve.refine(F, C, field > 0, ys, xs, zs)[0]
             bounds = clipcarve.bounds_from(C, S)
             ys, xs, zs, _ = clipcarve._axes(bounds, 128)
+        if stills:
+            # ขั้น refine คืนกล้องชุดใหม่ ต้องอัปเดตฝั่งภาพนิ่งด้วย ไม่งั้น
+            # ขั้นฉายสีจะใช้มาตราส่วนเก่าแล้วลายผิวเลื่อนไปจากรูปทรง
+            for st, cam in zip(stills, C[len(pick):]):
+                st.cam = cam
+
+    # เหนือแนวคอขึ้นไป เฟรมคลิปมักถ่ายไม่ติดหรือมาตราส่วนเพี้ยน ให้ภาพนิ่ง
+    # ที่เห็นหัวเต็ม ๆ เป็นคนตัดสินรูปทรงแทน (ดู clipcarve.sdf_field)
+    trust = solo_above = None
+    if stills and a.stills_only_above < 1.0:
+        trust = [False] * len(pick) + [True] * len(stills)
+        solo_above = a.stills_only_above
 
     grid, field, axes = clipcarve.carve_sdf(
         F, C, S, cfg, a.voxel_res, drop=a.drop, smooth=a.field_smooth,
-        open_iters=a.open_iters, tol_views=a.tol_views)
+        open_iters=a.open_iters, tol_views=a.tol_views,
+        trust=trust, solo_above=solo_above)
 
     # ---- แยกกฎตามส่วนของตัว ---------------------------------------------
     # ขั้นเก็บกวาดที่จำเป็นกับลำตัว (ลบแผ่นบาง เกลาสนาม) เป็นตัวทำลายมือ
@@ -223,6 +272,13 @@ def run_hull(a, cfg, frames, sol, out_dir: Path) -> int:
     tex_pick = _even_angles(sol.cams, max(a.texture_views, a.views))
     TF = [frames[i] for i in tex_pick]
     TC = [sol.cams[i] for i in tex_pick]
+    if stills:
+        # ภาพนิ่งคมกว่าเฟรมคลิปเกือบสองเท่า ใส่เข้าไปในชุดที่ให้เลือกตอนฉายสี
+        # ด้วย — ขั้น bake เลือกมุมที่ผิวหันเข้าหามากที่สุดอยู่แล้ว
+        TF += [s.frame for s in stills]
+        TC += [s.cam for s in stills]
+        log.info("ฉายสีจาก %d เฟรมคลิป + ภาพนิ่ง %d ใบ", len(tex_pick),
+                 len(stills))
     tex_img = nrm_img = rough_img = None
     if cfg.texture_mode == "uv":
         mesh = uvmap.unwrap(mesh, cfg)
@@ -378,7 +434,7 @@ def run(a: argparse.Namespace) -> int:
     frames, sol = solve_clip(a, cfg, cache)
     turntable.save_cameras(sol.cams, cache / "cameras.json")
 
-    rc = (run_hull(a, cfg, frames, sol, out_dir) if a.mode == "hull"
+    rc = (run_hull(a, cfg, frames, sol, out_dir, cache) if a.mode == "hull"
           else run_views(a, cfg, frames, sol, out_dir))
 
     log.info("\n\033[1mเสร็จใน %.0f วินาที\033[0m — ผลลัพธ์อยู่ที่ %s",

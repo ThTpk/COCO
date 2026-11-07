@@ -47,7 +47,8 @@
 
   <div class="row"><label>โมเดล</label>
     <button id="m1" title="สร้างจากภาพนิ่ง 4 มุมใน input/">ภาพนิ่ง</button>
-    <button id="m2" title="สร้างจากคลิปกล้องวนรอบตัว (input/clip.mp4)">คลิป</button></div>
+    <button id="m2" title="สร้างจากคลิปกล้องวนรอบตัว (input/clip.mp4)">คลิป</button>
+    <button id="m3" title="คลิป + ภาพนิ่งสี่มุม — ภาพนิ่งเป็นคนตัดสินรูปทรงช่วงหัว">คลิป+ภาพนิ่ง</button></div>
 
   <div class="row"><label for="file">เปิดไฟล์</label>
     <input id="file" type="file" accept=".glb,.gltf" hidden>
@@ -335,8 +336,9 @@ renderer.setAnimationLoop(() => {
 
 // ---- สลับโมเดล ----------------------------------------------------------
 //
-// โปรเจกต์นี้มีสองเส้นทางที่ให้ตัวละครคนเดียวกันคนละตัว: จากภาพนิ่ง 4 มุม
-// กับจากคลิปกล้องวนรอบ การสลับไปมาคือวิธีเทียบผลที่เร็วที่สุด
+// โปรเจกต์นี้มีสามเส้นทางที่ให้ตัวละครคนเดียวกันคนละตัว: จากภาพนิ่ง 4 มุม,
+// จากคลิปกล้องวนรอบ, และจากคลิปที่เอาภาพนิ่งมาเสริม การสลับไปมาคือวิธีเทียบผล
+// ที่เร็วที่สุด — จุดที่ต่างกันชัดที่สุดคือหัว เพราะคลิปถ่ายหัวไม่ติดหลายเฟรม
 //
 // ในแต่ละเส้นทางเอาไฟล์ที่ rig แล้วก่อน เพราะมีอนิเมชันให้ดูด้วย ถ้ายังไม่ได้
 // rig ก็ถอยไปใช้ไฟล์ mesh เปล่า — คนที่เพิ่งรัน --rig none จะได้ยังเห็นผลงาน
@@ -345,6 +347,8 @@ const MODELS = {
         files: ['../output/character_rigged.glb', '../output/character.glb'] },
   m2: { name: 'จากคลิป',
         files: ['../output/character2_rigged.glb', '../output/character2.glb'] },
+  m3: { name: 'จากคลิป + ภาพนิ่ง',
+        files: ['../output/character3_rigged.glb', '../output/character3.glb'] },
 };
 
 const exists = url => fetch(url, { method: 'HEAD' })

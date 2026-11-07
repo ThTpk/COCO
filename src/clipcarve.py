@@ -125,7 +125,8 @@ def _accumulate(frames: list[ClipFrame], cams: list[Camera],
 def sdf_field(frames: list[ClipFrame], cams: list[Camera],
               ys: np.ndarray, xs: np.ndarray, zs: np.ndarray,
               drop: int = 1, min_views: int = 3,
-              tol_views: int = 8) -> np.ndarray:
+              tol_views: int = 8, trust: list[bool] | None = None,
+              solo_above: float | None = None) -> np.ndarray:
     """ระยะจากผิว hull ของแต่ละ voxel (บวก = อยู่ใน, หน่วย = ความสูงตัวละคร)
 
     ต่างจากการนับโหวตแบบ "ใน/นอก" ตรงที่เก็บ *ระยะ* ไว้ด้วย ซึ่งให้สองอย่าง
@@ -139,6 +140,15 @@ def sdf_field(frames: list[ClipFrame], cams: list[Camera],
 
     voxel ที่ฉายออกนอกเฟรมของมุมไหน มุมนั้นไม่ออกเสียงเลย (ไม่ใช่ "อยู่นอก")
     ขาที่หลุดขอบล่างในมุมข้างจึงไม่ถูกมุมข้างเฉือนทิ้ง
+
+    ``trust`` + ``solo_above``: เหนือความสูง ``solo_above`` (หน่วย = ความสูง
+    ตัวละคร) ให้เฉพาะมุมที่ ``trust`` เป็นจริงเท่านั้นที่ออกเสียง
+
+    มีไว้เพื่อหัวโดยเฉพาะ ในคลิปที่กล้องเข้าใกล้ ตัวละครหลุดขอบบนของเฟรมบ่อย
+    และความคลาดของมาตราส่วนรายเฟรมก็ไปโผล่แรงที่สุดตรงจุดที่ไกลจากพื้นที่สุด
+    (วัดจากคลิปตัวอย่าง: ยอดหัวที่แต่ละเฟรมบอก กระจายกัน 6% ของความสูงตัว)
+    ผลคือปากจระเข้ที่ยื่นไปข้างหน้าโดนมุมที่เพี้ยนเฉือนกลับเข้ามาจนเหลือกรวย
+    ส่วนภาพนิ่งสี่มุมเห็นหัวเต็ม ๆ และสัดส่วนคงที่ จึงให้มันเป็นคนตัดสินแทน
     """
     ny, nx, nz = len(ys), len(xs), len(zs)
     BIG = np.float32(1e3)
@@ -148,7 +158,14 @@ def sdf_field(frames: list[ClipFrame], cams: list[Camera],
     gx = xs[:, None]
     gz = zs[None, :]
     slab = max(8, 2 ** 22 // max(1, nx * nz))
-    for cam, frame in zip(cams, frames):
+    if trust is None:
+        trust = [True] * len(cams)
+    n_mute = sum(1 for t in trust if not t)
+    if solo_above is not None and n_mute:
+        log.info("เหนือ %.2f ของความสูงตัว ให้เฉพาะ %d มุมที่เชื่อถือได้ออกเสียง "
+                 "(ปิดเสียง %d มุม)", solo_above, len(cams) - n_mute, n_mute)
+
+    for cam, frame, ok_high in zip(cams, frames, trust):
         m = frame.mask
         h, w = m.shape
         inside = cv2.distanceTransform(m.astype(np.uint8), cv2.DIST_L2, 3)
@@ -167,6 +184,8 @@ def sdf_field(frames: list[ClipFrame], cams: list[Camera],
             v = cam.cy - cam.sv * (cam.h + (yy[:, None, None] - cam.h) * g)
             vi = np.rint(v).astype(np.int32)
             ok = (vi >= 0) & (vi < h) & ok_u[None, :, :]
+            if solo_above is not None and not ok_high:
+                ok &= (yy[:, None, None] <= solo_above)
             np.clip(vi, 0, h - 1, out=vi)
 
             d = np.where(ok, signed[vi, ui[None, :, :]], BIG)
@@ -255,7 +274,9 @@ def vote_field(frames: list[ClipFrame], cams: list[Camera],
 def carve_sdf(frames: list[ClipFrame], cams: list[Camera], stats: list[MaskStats],
               cfg: PipelineConfig, res: int, drop: int = 2, min_views: int = 3,
               smooth: float = 2.0, open_iters: int = 2, tol_views: int = 8,
-              bounds: Bounds | None = None) -> tuple[HullGrid, np.ndarray, tuple]:
+              bounds: Bounds | None = None, trust: list[bool] | None = None,
+              solo_above: float | None = None
+              ) -> tuple[HullGrid, np.ndarray, tuple]:
     """เฉือน voxel จากหลายมุมด้วยสนามระยะ แล้วคืนกริดที่พร้อมเข้าขั้น meshing
 
     ขั้นตอน
@@ -275,7 +296,8 @@ def carve_sdf(frames: list[ClipFrame], cams: list[Camera], stats: list[MaskStats
              len(ys) * len(xs) * len(zs) / 1e6, len(cams))
 
     field = sdf_field(frames, cams, ys, xs, zs, drop=drop,
-                      min_views=min_views, tol_views=tol_views)
+                      min_views=min_views, tol_views=tol_views,
+                      trust=trust, solo_above=solo_above)
     grid = assemble(field, bounds, step, cfg, smooth=smooth,
                     open_iters=open_iters)
     return grid, field, (ys, xs, zs)
