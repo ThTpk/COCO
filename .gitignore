@@ -13,7 +13,7 @@ output/*
 !output/character3_rigged.glb
 !output/character4_rigged.glb
 !output/croc_hunyuan_v4_rigged.glb
-!output/croc_photo_textured.glb
+!output/croc_photo_rigged.glb
 
 # ภาพตรวจงานระหว่างทาง สร้างใหม่ได้ทุกเมื่อด้วย --debug
 output/debug/
