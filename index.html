@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>2Dto3D — Crocodile</title>
-<meta name="description" content="ห้าโมเดล 3D ของตัวละครเดียวกัน สร้างจากภาพ 2D คนละวิธี เทียบกันได้ในหน้าเดียว">
+<meta name="description" content="หกโมเดล 3D ของตัวละครเดียวกัน สร้างจากภาพ 2D คนละวิธี เทียบกันได้ในหน้าเดียว">
 <style>
   :root {
     color-scheme: dark;
@@ -130,7 +130,7 @@
 
 <header>
   <h1>2Dto3D</h1>
-  <span class="sub">ตัวละครเดียวกัน ห้าวิธี สร้างจากภาพ 2D ชุดเดิม</span>
+  <span class="sub">ตัวละครเดียวกัน หกวิธี สร้างจากภาพ 2D ชุดเดิม</span>
   <span class="spacer"></span>
   <a href="https://github.com/ThTpk/COCO">source บน GitHub</a>
 </header>
@@ -166,7 +166,7 @@
 </footer>
 
 <script type="module">
-  // ห้าเส้นทางที่ลองมาตามลำดับเวลา เก็บไว้ครบเพื่อให้เทียบกันได้ว่าแต่ละวิธีได้อะไรมา
+  // หกเส้นทางที่ลองมาตามลำดับเวลา เก็บไว้ครบเพื่อให้เทียบกันได้ว่าแต่ละวิธีได้อะไรมา
   const MODELS = [
     {
       file: 'output/character_rigged.glb',
@@ -203,6 +203,15 @@
       how: 'ให้โมเดล generative ปั้นรูปทรงจากภาพ แล้วอบสีจากภาพต้นฉบับทับลงไป ' +
            'ได้ผิวละเอียดที่สุดในชุดนี้ ส่วนโครงกระดูกอ่านตำแหน่งข้อต่อจากตัว ' +
            'mesh เองด้วย tools/autorig.py แล้วให้ Blender ผูก weight ให้',
+    },
+    {
+      file: 'output/croc_photo_textured.glb',
+      label: 'ภาพถ่ายพื้นขาว',
+      note: 'Comfy Desktop + Blender',
+      how: 'ชุดภาพถ่ายพื้นขาวที่วนรอบตัว เข้า Comfy Desktop แล้วได้ mesh 335,000 ' +
+           'หน้า ละเอียดกว่าทุกตัวก่อนหน้าเกือบสามเท่า จากนั้น Blender กาง UV ' +
+           'แล้วอบสีจากภาพถ่ายลง atlas 2048 — สีบนตัวจึงมาจากภาพจริงทั้งหมด ' +
+           'ตัวนี้ยังไม่ได้ใส่โครงกระดูก จึงเป็นโมเดลนิ่ง',
     },
   ];
 
