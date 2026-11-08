@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import tempfile
 from pathlib import Path
 
 import bpy
@@ -50,19 +51,92 @@ def decimate(obj, target: int) -> None:
     say(f"ลดหน้า {faces} -> {len(obj.data.polygons)}")
 
 
-def shrink_images(quality: int, max_size: int) -> None:
-    for img in bpy.data.images:
-        if img.source != "FILE" and not img.packed_file and img.size[0] == 0:
+def trace_image(socket, depth: int = 6):
+    """เดินย้อนจากขา input ไปหา Image Texture ที่ป้อนมัน"""
+    if depth <= 0 or not socket.is_linked:
+        return None
+    node = socket.links[0].from_node
+    if node.type == "TEX_IMAGE":
+        return node.image
+    for inp in node.inputs:
+        found = trace_image(inp, depth - 1)
+        if found is not None:
+            return found
+    return None
+
+
+def color_images() -> set[str]:
+    """ชื่อภาพที่ทำหน้าที่เป็น "สี" ไม่ใช่ข้อมูลเชิงตัวเลข
+
+    normal map กับ roughness map เก็บตัวเลขไว้ในช่องสี ไม่ใช่ภาพที่ตาคนดู
+    JPEG ซึ่งทิ้งรายละเอียดตามที่ตาคนไม่ค่อยเห็น จะทำให้ผิวเป็นคลื่นหรือด่าง
+    เลยแตะเฉพาะ base color กับ emission
+    """
+    names = set()
+    for mat in bpy.data.materials:
+        if not mat.node_tree:
             continue
+        for node in mat.node_tree.nodes:
+            if node.type != "BSDF_PRINCIPLED":
+                continue
+            for slot in ("Base Color", "Emission Color", "Emission"):
+                inp = node.inputs.get(slot)
+                if inp is None:
+                    continue
+                img = trace_image(inp)
+                if img is not None:
+                    names.add(img.name)
+    return names
+
+
+def shrink_images(quality: int, map_quality: int, max_size: int, map_size: int) -> None:
+    colors = color_images()
+    for img in bpy.data.images:
         if img.size[0] == 0:
             continue
         w, h = img.size
-        if max_size and max(w, h) > max_size:
-            img.scale(min(w, max_size), min(h, max_size))
+        # ไฟล์ที่บีบ mesh มาแล้วเหลือน้ำหนักอยู่ที่ normal map เป็นหลัก และ
+        # Blender ตั้งคุณภาพ JPEG ได้ค่าเดียวทั้งไฟล์ตอน export จะลดเฉพาะ
+        # แผนที่ให้ต่ำกว่าสีจึงทำไม่ได้ เหลือทางเดียวคือย่อขนาดมันลง
+        limit = map_size if (map_size and img.name not in colors) else max_size
+        if limit and max(w, h) > limit:
+            img.scale(min(w, limit), min(h, limit))
             say(f"ย่อ {img.name} {w}x{h} -> {img.size[0]}x{img.size[1]}")
-        # ตั้ง file_format ไว้ล่วงหน้า เพราะตัว export โหมด AUTO ดูค่านี้ว่าจะ
-        # เขียนออกเป็นอะไร ส่วน alpha ไม่ต้องห่วง — albedo ชุดนี้ทึบทั้งใบ
-        img.file_format = "JPEG"
+        if img.name in colors:
+            if quality:
+                recode_jpeg(img, quality)
+        elif map_quality:
+            # normal map เป็นตัวที่หนักที่สุดในไฟล์พวกนี้ และมักถูกเซฟมาแบบ
+            # เกือบไม่บีบ ลดคุณภาพลงพอประมาณจึงได้เนื้อที่คืนเยอะ แต่ลดแรง
+            # ไม่ได้ เพราะ artifact ของ JPEG บนแผนที่ตัวเลขจะโผล่เป็นคลื่นบนผิว
+            recode_jpeg(img, map_quality)
+        else:
+            say(f"{img.name} ไม่ใช่ภาพสี คงรูปแบบเดิม ({img.file_format})")
+
+
+def recode_jpeg(img, quality: int) -> None:
+    """บีบภาพเป็น JPEG จริง ๆ แล้วฝังกลับเข้าไฟล์
+
+    ตั้งแค่ img.file_format ไม่พอ — ตัว export โหมด AUTO ตัดสินจากข้อมูลที่
+    ฝังมากับภาพ ไม่ใช่ค่าที่เราเพิ่งตั้ง ภาพที่เข้ามาเป็น PNG จึงออกไปเป็น PNG
+    เหมือนเดิม ต้องเขียนเป็น JPEG ลงดิสก์แล้วโหลดกลับมา ให้ข้อมูลที่ฝังอยู่
+    เป็น JPEG ตั้งแต่ก่อนถึงขั้น export
+    """
+    before = len(img.packed_file.data) if img.packed_file else 0
+    bpy.context.scene.render.image_settings.file_format = "JPEG"
+    bpy.context.scene.render.image_settings.quality = quality
+
+    tmp = Path(tempfile.mkdtemp()) / f"{img.name}.jpg"
+    img.file_format = "JPEG"
+    img.filepath_raw = str(tmp)
+    img.save(quality=quality)
+
+    img.source = "FILE"
+    img.filepath = str(tmp)
+    img.reload()
+    img.pack()
+    after = len(img.packed_file.data) if img.packed_file else 0
+    say(f"{img.name} -> JPEG q{quality} ({before / 1e6:.2f} -> {after / 1e6:.2f} MB)")
 
 
 def main() -> None:
@@ -74,7 +148,11 @@ def main() -> None:
     ap.add_argument("--draco", action="store_true")
     ap.add_argument("--draco-level", type=int, default=6)
     ap.add_argument("--jpeg", type=int, default=0, help="คุณภาพ JPEG 0 = คง PNG ไว้")
+    ap.add_argument("--map-jpeg", type=int, default=0,
+                    help="คุณภาพ JPEG ของ normal/roughness map 0 = ไม่แตะ")
     ap.add_argument("--tex-size", type=int, default=0, help="ย่อ texture ลงเหลือกี่พิกเซล")
+    ap.add_argument("--map-size", type=int, default=0,
+                    help="ย่อเฉพาะ normal/roughness map ลงเหลือกี่พิกเซล")
     args = ap.parse_args(argv)
 
     meshes = load(args.src)
@@ -83,15 +161,16 @@ def main() -> None:
         say(f"{obj.name}: {len(obj.data.vertices)} จุด {len(obj.data.polygons)} หน้า")
         decimate(obj, args.faces)
 
-    if args.jpeg or args.tex_size:
-        shrink_images(args.jpeg or 90, args.tex_size)
+    if args.jpeg or args.map_jpeg or args.tex_size or args.map_size:
+        shrink_images(args.jpeg, args.map_jpeg, args.tex_size, args.map_size)
 
     kw = {}
     if args.draco:
         kw.update(export_draco_mesh_compression_enable=True,
                   export_draco_mesh_compression_level=args.draco_level)
-    if args.jpeg:
-        kw.update(export_image_format="JPEG", export_jpeg_quality=args.jpeg)
+    if args.jpeg or args.map_jpeg:
+        kw.update(export_image_format="AUTO",
+                  export_jpeg_quality=max(args.jpeg, args.map_jpeg))
 
     args.dst.parent.mkdir(parents=True, exist_ok=True)
     bpy.ops.export_scene.gltf(filepath=str(args.dst), export_format="GLB",
