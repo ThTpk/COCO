@@ -17,95 +17,18 @@ from __future__ import annotations
 
 import argparse
 import json
-import struct
 import sys
 from pathlib import Path
 
 import numpy as np
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from glbmesh import append_view, read_accessor, read_glb, write_glb  # noqa: E402
+
 # คอนโซลวินโดวส์ไทยเป็น cp874 เขียนลูกศรหรืออักษรนอกตารางไม่ได้ บังคับเป็น utf-8
 for stream in (sys.stdout, sys.stderr):
     if hasattr(stream, "reconfigure"):
         stream.reconfigure(encoding="utf-8", errors="replace")
-
-JSON_CHUNK = 0x4E4F534A
-BIN_CHUNK = 0x004E4942
-
-# ชนิดข้อมูลของ accessor ที่สคริปต์นี้ต้องอ่าน
-COMPONENT_DTYPE = {
-    5120: np.int8,
-    5121: np.uint8,
-    5122: np.int16,
-    5123: np.uint16,
-    5125: np.uint32,
-    5126: np.float32,
-}
-TYPE_COUNT = {"SCALAR": 1, "VEC2": 2, "VEC3": 3, "VEC4": 4}
-
-
-def read_glb(path: Path) -> tuple[dict, bytearray]:
-    data = path.read_bytes()
-    magic, version, _ = struct.unpack_from("<4sII", data, 0)
-    if magic != b"glTF":
-        raise SystemExit(f"{path} ไม่ใช่ไฟล์ .glb")
-    if version != 2:
-        raise SystemExit(f"รองรับเฉพาะ glTF 2.0 ไฟล์นี้เป็นเวอร์ชัน {version}")
-
-    gltf: dict | None = None
-    blob = bytearray()
-    off = 12
-    while off < len(data):
-        length, kind = struct.unpack_from("<II", data, off)
-        body = data[off + 8 : off + 8 + length]
-        if kind == JSON_CHUNK:
-            gltf = json.loads(body)
-        elif kind == BIN_CHUNK:
-            blob = bytearray(body)
-        off += 8 + length
-
-    if gltf is None:
-        raise SystemExit(f"{path} ไม่มี JSON chunk")
-    return gltf, blob
-
-
-def write_glb(path: Path, gltf: dict, blob: bytearray) -> None:
-    # glTF บังคับว่าทุก chunk ต้องยาวเป็นพหุคูณของ 4
-    # JSON เติมด้วยช่องว่าง ส่วน BIN เติมด้วยศูนย์
-    raw_json = json.dumps(gltf, separators=(",", ":")).encode("utf-8")
-    raw_json += b" " * (-len(raw_json) % 4)
-    raw_bin = bytes(blob)
-    raw_bin += b"\x00" * (-len(raw_bin) % 4)
-
-    total = 12 + 8 + len(raw_json) + 8 + len(raw_bin)
-    out = bytearray()
-    out += struct.pack("<4sII", b"glTF", 2, total)
-    out += struct.pack("<II", len(raw_json), JSON_CHUNK) + raw_json
-    out += struct.pack("<II", len(raw_bin), BIN_CHUNK) + raw_bin
-    path.write_bytes(out)
-
-
-def read_accessor(gltf: dict, blob: bytearray, index: int) -> np.ndarray:
-    acc = gltf["accessors"][index]
-    if "sparse" in acc:
-        raise SystemExit("ยังไม่รองรับ accessor แบบ sparse")
-
-    dtype = COMPONENT_DTYPE[acc["componentType"]]
-    ncomp = TYPE_COUNT[acc["type"]]
-    count = acc["count"]
-    view = gltf["bufferViews"][acc["bufferView"]]
-    start = view.get("byteOffset", 0) + acc.get("byteOffset", 0)
-    item = np.dtype(dtype).itemsize * ncomp
-    stride = view.get("byteStride") or item
-
-    if stride == item:
-        flat = np.frombuffer(blob, dtype=dtype, count=count * ncomp, offset=start)
-        # ต้อง copy เพราะ view ที่ค้างอยู่จะล็อก bytearray ไม่ให้ขยายตอนต่อท้าย
-        return flat.reshape(count, ncomp).copy()
-
-    # ข้อมูลวางแบบ interleaved ต้องหยิบทีละแถวตามระยะก้าว
-    raw = np.frombuffer(blob, dtype=np.uint8, count=count * stride, offset=start)
-    rows = raw.reshape(count, stride)[:, :item].copy()
-    return rows.view(dtype).reshape(count, ncomp)
 
 
 def smooth_normals(positions: np.ndarray, faces: np.ndarray) -> np.ndarray:
@@ -134,17 +57,6 @@ def smooth_normals(positions: np.ndarray, faces: np.ndarray) -> np.ndarray:
     length[degenerate] = 1.0
 
     return (acc / length)[group].astype(np.float32)
-
-
-def append_view(gltf: dict, blob: bytearray, payload: bytes) -> int:
-    blob += b"\x00" * (-len(blob) % 4)  # bufferView ต้องเริ่มที่ตำแหน่งหาร 4 ลงตัว
-    offset = len(blob)
-    blob += payload
-    gltf.setdefault("bufferViews", []).append(
-        {"buffer": 0, "byteOffset": offset, "byteLength": len(payload), "target": 34962}
-    )
-    gltf["buffers"][0]["byteLength"] = len(blob)
-    return len(gltf["bufferViews"]) - 1
 
 
 def main() -> int:
@@ -176,7 +88,7 @@ def main() -> int:
             faces = read_accessor(gltf, blob, prim["indices"]).reshape(-1, 3)
             normals = smooth_normals(positions, faces.astype(np.int64))
 
-            view = append_view(gltf, blob, normals.tobytes())
+            view = append_view(gltf, blob, normals.tobytes(), target=34962)
             gltf["accessors"].append(
                 {
                     "bufferView": view,

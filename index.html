@@ -197,11 +197,12 @@
            'คนละชุด แล้ว sculpt ต่อใน Blender',
     },
     {
-      file: 'output/croc_hunyuan_textured_v4_smooth.glb',
+      file: 'output/croc_hunyuan_v4_rigged.glb',
       label: 'Hunyuan3D',
-      note: 'generative + อบ texture',
+      note: 'generative + rig อัตโนมัติ',
       how: 'ให้โมเดล generative ปั้นรูปทรงจากภาพ แล้วอบสีจากภาพต้นฉบับทับลงไป ' +
-           'ได้ผิวละเอียดที่สุดในชุดนี้ แต่ยังไม่ได้ rig จึงไม่มีอนิเมชัน',
+           'ได้ผิวละเอียดที่สุดในชุดนี้ ส่วนโครงกระดูกอ่านตำแหน่งข้อต่อจากตัว ' +
+           'mesh เองด้วย tools/autorig.py แล้วให้ Blender ผูก weight ให้',
     },
   ];
 
