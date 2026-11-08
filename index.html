@@ -112,6 +112,11 @@
     color: var(--muted); font-size: 12px;
   }
   footer a { color: var(--accent); }
+  /* จอแคบลง กล่องข้อมูลเริ่มทับตัวโมเดลที่อยู่กลางจอ ตัดคำอธิบายยาวออกก่อน */
+  @media (max-width: 900px) {
+    .meta { max-width: 28vw; }
+    .meta .how { display: none; }
+  }
   @media (max-width: 640px) {
     .meta { display: none; }
     header h1 { font-size: 15px; }
@@ -192,7 +197,7 @@
            'คนละชุด แล้ว sculpt ต่อใน Blender',
     },
     {
-      file: 'output/croc_hunyuan_textured_v2_smooth.glb',
+      file: 'output/croc_hunyuan_textured_v4_smooth.glb',
       label: 'Hunyuan3D',
       note: 'generative + อบ texture',
       how: 'ให้โมเดล generative ปั้นรูปทรงจากภาพ แล้วอบสีจากภาพต้นฉบับทับลงไป ' +
