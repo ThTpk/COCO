@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>2Dto3D — Crocodile</title>
-<meta name="description" content="โมเดล 3D ที่สร้างจากภาพ 2D หลายมุมด้วย visual hull แล้ว rig อัตโนมัติ">
+<meta name="description" content="ห้าโมเดล 3D ของตัวละครเดียวกัน สร้างจากภาพ 2D คนละวิธี เทียบกันได้ในหน้าเดียว">
 <style>
   :root {
     color-scheme: dark;
@@ -42,6 +42,28 @@
   header a { color: var(--accent); font-size: 13px; text-decoration: none; }
   header a:hover { text-decoration: underline; }
 
+  /* แถบเลือกโมเดล วางไว้ใต้หัวเรื่องเพราะเป็นสิ่งแรกที่คนมาหน้านี้ต้องใช้ */
+  .models {
+    display: flex; gap: 6px; padding: 8px 16px; overflow-x: auto;
+    border-bottom: 1px solid var(--line); background: var(--panel);
+  }
+  .models button {
+    appearance: none; cursor: pointer; text-align: left; white-space: nowrap;
+    border: 1px solid var(--line); border-radius: 9px; padding: 6px 12px;
+    background: transparent; color: var(--muted); font: inherit; font-size: 13px;
+  }
+  .models button:hover { color: var(--text); border-color: var(--muted); }
+  .models button[aria-pressed="true"] {
+    background: color-mix(in srgb, var(--accent) 18%, transparent);
+    border-color: var(--accent); color: var(--text);
+  }
+  .models button .n {
+    display: inline-block; min-width: 1.1em; margin-right: 7px;
+    font-variant-numeric: tabular-nums; color: var(--accent); font-weight: 600;
+  }
+  .models button .note { color: var(--muted); font-size: 12px; margin-left: 7px; }
+  .models button[aria-pressed="true"] .note { color: var(--text); opacity: .75; }
+
   main { flex: 1 1 auto; position: relative; min-height: 0; }
   model-viewer {
     width: 100%; height: 100%;
@@ -57,6 +79,8 @@
     border: 1px solid var(--line); border-radius: 12px;
     backdrop-filter: blur(10px); overflow-x: auto;
   }
+  /* [hidden] ของเบราว์เซอร์แพ้ display:flex ด้านบน ต้องเขียนทับเอง */
+  .bar[hidden] { display: none; }
   .bar button {
     appearance: none; border: 1px solid transparent; border-radius: 8px;
     padding: 7px 13px; font: inherit; font-size: 13px; white-space: nowrap;
@@ -69,7 +93,7 @@
   }
 
   .meta {
-    position: absolute; top: 14px; left: 14px; padding: 10px 13px;
+    position: absolute; top: 14px; left: 14px; padding: 10px 13px; max-width: 46ch;
     background: color-mix(in srgb, var(--panel) 85%, transparent);
     border: 1px solid var(--line); border-radius: 10px;
     backdrop-filter: blur(10px);
@@ -77,15 +101,21 @@
     color: var(--muted); pointer-events: none;
   }
   .meta b { color: var(--text); font-weight: 600; }
+  .meta .how {
+    display: block; margin-top: 5px; padding-top: 5px;
+    border-top: 1px solid var(--line);
+    font-family: "Segoe UI", system-ui, sans-serif; font-size: 12px;
+  }
 
   footer {
     padding: 10px 16px; border-top: 1px solid var(--line);
     color: var(--muted); font-size: 12px;
   }
   footer a { color: var(--accent); }
-  @media (max-width: 540px) {
+  @media (max-width: 640px) {
     .meta { display: none; }
     header h1 { font-size: 15px; }
+    .models button .note { display: none; }
   }
 </style>
 <script type="module"
@@ -95,16 +125,17 @@
 
 <header>
   <h1>2Dto3D</h1>
-  <span class="sub">โมเดลเดียว สร้างจากภาพ 2D หลายมุม แล้ว rig อัตโนมัติ</span>
+  <span class="sub">ตัวละครเดียวกัน ห้าวิธี สร้างจากภาพ 2D ชุดเดิม</span>
   <span class="spacer"></span>
   <a href="https://github.com/ThTpk/COCO">source บน GitHub</a>
 </header>
 
+<nav class="models" id="models" aria-label="เลือกโมเดล"></nav>
+
 <main>
   <model-viewer
     id="mv"
-    src="output/character5_rigged.glb"
-    alt="ตัวละครจระเข้ สร้างจากภาพ 2D หลายมุม"
+    alt="ตัวละครจระเข้ สร้างจากภาพ 2D"
     camera-controls
     touch-action="pan-y"
     auto-rotate
@@ -113,30 +144,103 @@
     shadow-intensity="0.9"
     shadow-softness="0.7"
     exposure="1.05"
-    camera-orbit="180deg 82deg 4.6m"
+    camera-orbit="-25deg 78deg auto"
     field-of-view="30deg"
     min-field-of-view="12deg"
     max-field-of-view="50deg"
     environment-image="neutral"
     ar ar-modes="webxr scene-viewer quick-look">
     <div class="meta" id="meta">กำลังโหลด…</div>
-    <div class="bar" id="bar" slot="" hidden></div>
+    <div class="bar" id="bar" hidden></div>
   </model-viewer>
 </main>
 
 <footer>
-  ลากเพื่อหมุน · สกรอลล์เพื่อซูม · ปุ่มด้านล่างสลับอนิเมชัน ·
-  <a href="output/character5_rigged.glb" download>ดาวน์โหลด .glb</a>
+  ลากเพื่อหมุน · สกรอลล์เพื่อซูม · ปุ่มบนสลับโมเดล ปุ่มล่างสลับอนิเมชัน ·
+  <a id="dl" href="#" download>ดาวน์โหลด .glb</a>
 </footer>
 
 <script type="module">
-  const mv   = document.getElementById('mv');
-  const bar  = document.getElementById('bar');
-  const meta = document.getElementById('meta');
+  // ห้าเส้นทางที่ลองมาตามลำดับเวลา เก็บไว้ครบเพื่อให้เทียบกันได้ว่าแต่ละวิธีได้อะไรมา
+  const MODELS = [
+    {
+      file: 'output/character_rigged.glb',
+      label: 'ภาพนิ่ง 4 มุม',
+      note: 'visual hull',
+      how: 'แกะ silhouette จากภาพนิ่งหน้า/หลัง/ข้าง แล้วเจาะ voxel grid เป็นรูปทรง ' +
+           'ส่วนที่ยื่นอย่างหางกับปากแยกไปปั้นเป็นก้อนของตัวเองก่อนเชื่อมกลับ',
+    },
+    {
+      file: 'output/character2_rigged.glb',
+      label: 'คลิป turntable',
+      note: 'silhouette ทุกองศา',
+      how: 'อ่านมุมกล้อง สเกล และเส้นพื้นออกจากคลิปที่หมุนรอบตัวหนึ่งรอบ ' +
+           'ได้ silhouette ทุกองศาแทนที่จะมีแค่สี่มุม',
+    },
+    {
+      file: 'output/character3_rigged.glb',
+      label: 'คลิป + ภาพนิ่ง',
+      note: 'เอาหัวจากภาพนิ่ง',
+      how: 'คลิปมองไม่เห็นหัวจระเข้ มีแค่ 51 จาก 240 เฟรมที่เห็นทั้งตัว ' +
+           'visual hull เลยกินปากหายไป รอบนี้เอาลำตัวจากคลิป เอาหัวจากภาพนิ่ง',
+    },
+    {
+      file: 'output/character4_rigged.glb',
+      label: '4 เลเยอร์ + Blender',
+      note: 'แยกงานของภาพ',
+      how: 'เลิกให้ภาพเดียวทำสามหน้าที่พร้อมกัน แยกเป็นเส้นขอบ/สี/ความขรุขระ ' +
+           'คนละชุด แล้ว sculpt ต่อใน Blender',
+    },
+    {
+      file: 'output/croc_hunyuan_textured_v2_smooth.glb',
+      label: 'Hunyuan3D',
+      note: 'generative + อบ texture',
+      how: 'ให้โมเดล generative ปั้นรูปทรงจากภาพ แล้วอบสีจากภาพต้นฉบับทับลงไป ' +
+           'ได้ผิวละเอียดที่สุดในชุดนี้ แต่ยังไม่ได้ rig จึงไม่มีอนิเมชัน',
+    },
+  ];
+
+  const mv    = document.getElementById('mv');
+  const bar   = document.getElementById('bar');
+  const meta  = document.getElementById('meta');
+  const rail  = document.getElementById('models');
+  const dl    = document.getElementById('dl');
+
+  // ?model=3 ทำให้ส่งลิงก์ชี้โมเดลใดโมเดลหนึ่งได้ตรง ๆ
+  const wanted = Number(new URLSearchParams(location.search).get('model'));
+  let current = Number.isInteger(wanted) && MODELS[wanted - 1] ? wanted - 1 : MODELS.length - 1;
+
+  MODELS.forEach((m, i) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.innerHTML = `<span class="n">${i + 1}</span>${m.label}<span class="note">${m.note}</span>`;
+    b.addEventListener('click', () => select(i));
+    rail.appendChild(b);
+  });
+
+  function select(i) {
+    current = i;
+    [...rail.children].forEach((c, k) => c.setAttribute('aria-pressed', String(k === i)));
+    // เปิดด้วย ?model=5 บนจอแคบ ปุ่มที่เลือกอยู่นอกจอ ต้องเลื่อนมาให้เห็น
+    rail.children[i].scrollIntoView({ block: 'nearest', inline: 'nearest' });
+
+    const m = MODELS[i];
+    bar.hidden = true;        // ซ่อนปุ่มของโมเดลเก่าไว้ก่อน เดี๋ยว load สร้างชุดใหม่
+    bar.innerHTML = '';
+    meta.textContent = 'กำลังโหลด…';
+    dl.href = m.file;
+    mv.animationName = undefined;
+    mv.src = m.file;
+
+    const url = new URL(location.href);
+    url.searchParams.set('model', String(i + 1));
+    history.replaceState(null, '', url);
+  }
 
   // ปุ่มอนิเมชันสร้างจากคลิปที่อยู่ในไฟล์จริง ไม่ได้ hardcode ชื่อไว้
-  // ถ้าวันหลังเปลี่ยนชุดอนิเมชัน หน้านี้จะตามเองโดยไม่ต้องแก้
+  // โมเดลที่ยังไม่ได้ rig จะไม่มีแถบนี้ขึ้นมาเลย
   mv.addEventListener('load', () => {
+    const m = MODELS[current];
     const clips = mv.availableAnimations || [];
     bar.innerHTML = '';
 
@@ -154,29 +258,28 @@
       return b;
     };
 
-    const rest = mkBtn('ท่าพัก', () => { mv.pause(); mv.animationName = undefined; });
-    clips.forEach(name => mkBtn(name, () => {
-      mv.animationName = name;
-      mv.play({ repetitions: Infinity });
-    }));
-
     if (clips.length) {
+      mkBtn('ท่าพัก', () => { mv.pause(); mv.animationName = undefined; });
+      clips.forEach(name => mkBtn(name, () => {
+        mv.animationName = name;
+        mv.play({ repetitions: Infinity });
+      }));
       bar.hidden = false;
       // เริ่มที่คลิปแรกเพื่อให้เห็นว่ามันขยับได้จริงตั้งแต่เปิดหน้า
       bar.children[1].click();
-    } else {
-      rest.setAttribute('aria-pressed', 'true');
-      bar.hidden = clips.length === 0;
     }
 
     meta.innerHTML =
-      `<b>character5_rigged.glb</b><br>` +
-      `อนิเมชัน ${clips.length} ชุด${clips.length ? ': ' + clips.join(', ') : ''}`;
+      `<b>${m.file.split('/').pop()}</b><br>` +
+      (clips.length ? `อนิเมชัน ${clips.length} ชุด: ${clips.join(', ')}` : 'โมเดลนิ่ง ไม่มีอนิเมชัน') +
+      `<span class="how">${m.how}</span>`;
   });
 
   mv.addEventListener('error', () => {
-    meta.textContent = 'โหลดโมเดลไม่สำเร็จ — ตรวจว่าไฟล์ output/character5_rigged.glb อยู่ใน repo';
+    meta.textContent = `โหลดไม่สำเร็จ — ตรวจว่าไฟล์ ${MODELS[current].file} อยู่ใน repo`;
   });
+
+  select(current);
 </script>
 
 </body>
