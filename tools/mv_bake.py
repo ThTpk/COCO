@@ -12,6 +12,8 @@ mesh ที่ออกจาก Hunyuan3D มีแต่รูปทรง ไ
      แปลว่ากล้องอยู่ทางไหน และจับได้ด้วยถ้า mesh ออกมากลับซ้าย-ขวา
   3. ฉายภาพทุกใบกลับลงบน mesh เขียนลง texture atlas ใบเดียว โดยให้น้ำหนัก
      ตามว่าผิวหันเข้าหากล้องแค่ไหน และข้ามพิกเซลที่ถูกส่วนอื่นบังด้วย z-buffer
+     แล้วผสมสองความถี่ (multi-band): สีพื้นจากค่าเฉลี่ยของทุกมุมซึ่งไม่มี
+     รอยต่อ ส่วนรายละเอียดจากมุมที่หันตรงที่สุดมุมเดียวซึ่งคมที่สุด
   4. ประกอบวัสดุแล้ว export กลับเป็น .glb
 
 ทำไมไม่ใช้ paint model ของ Hunyuan: มันวาดสีขึ้นใหม่จากภาพเดียว ส่วนงานนี้มี
@@ -433,6 +435,38 @@ def sample(img: np.ndarray, px: np.ndarray, py: np.ndarray):
     return p[..., :3], p[..., 3]
 
 
+def _box1d(a: np.ndarray, r: int, axis: int) -> np.ndarray:
+    """เฉลี่ยแบบหน้าต่างเลื่อน กว้าง 2r+1 ด้วย cumsum — O(n) ไม่ขึ้นกับรัศมี"""
+    n = a.shape[axis]
+    pad = [(0, 0)] * a.ndim
+    pad[axis] = (r, r)
+    ap = np.pad(a, pad, mode="edge")
+    zero = np.zeros_like(np.take(ap, [0], axis=axis))
+    c = np.concatenate([zero, np.cumsum(ap, axis=axis)], axis=axis)
+    hi = np.take(c, np.arange(2 * r + 1, 2 * r + 1 + n), axis=axis)
+    lo = np.take(c, np.arange(0, n), axis=axis)
+    return (hi - lo) / (2 * r + 1)
+
+
+def blur_masked(x: np.ndarray, mask: np.ndarray, radius: int,
+                passes: int = 3) -> np.ndarray:
+    """เบลอโดยนับเฉพาะเท็กเซลที่มีสีจริง
+
+    เท็กเซลว่างในผืน UV ถ้าปล่อยให้ร่วมเฉลี่ยจะลากค่าลงเป็นศูนย์ ขอบของทุก
+    เกาะ UV จึงคล้ำ วิธีมาตรฐานคือเบลอ "ค่าคูณ mask" กับ "mask" แยกกัน
+    แล้วค่อยหารกันตอนท้าย ได้ค่าเฉลี่ยที่ถ่วงด้วยความมีอยู่จริง
+    ทำ box blur ซ้ำหลายรอบแทน Gaussian เพราะเร็วกว่ามากที่รัศมีกว้าง ๆ
+    """
+    m = mask.astype(np.float32)
+    num = (x.astype(np.float32) * m[..., None])
+    den = m
+    for _ in range(passes):
+        for axis in (0, 1):
+            num = _box1d(num, radius, axis)
+            den = _box1d(den, radius, axis)
+    return num / np.maximum(den, 1e-6)[..., None]
+
+
 def dilate(color: np.ndarray, valid: np.ndarray, rounds: int) -> np.ndarray:
     """ลามสีออกไปกินช่องว่าง เพื่อไม่ให้เห็นเส้นขาวตามรอยต่อ UV ตอน mipmap"""
     out = color.copy()
@@ -467,6 +501,11 @@ def main() -> None:
     ap.add_argument("--power", type=float, default=3.0, help="ยิ่งสูง ยิ่งเชื่อเฉพาะมุมที่หันตรง")
     ap.add_argument("--edge-guard", type=float, default=0.012,
                     help="หดเงาของภาพเข้ามากี่ส่วนของความสูงภาพ ก่อนรับสี")
+    ap.add_argument("--lowband", type=int, default=48,
+                    help="รัศมีเบลอของแถบความถี่ต่ำ 0 = ปิด multi-band")
+    ap.add_argument("--sharpness", type=float, default=8.0,
+                    help="ยิ่งสูง ความถี่สูงยิ่งมาจากมุมที่ดีที่สุดมุมเดียว "
+                         "(คมขึ้นแต่เสี่ยงรอยต่อ) 1 = เท่าน้ำหนักปกติ")
     ap.add_argument("--keep-uv", action="store_true",
                     help="ใช้ UV เดิมของไฟล์ แทนที่จะกางใหม่")
     args = ap.parse_args(argv)
@@ -516,6 +555,17 @@ def main() -> None:
 
     acc = np.zeros((size, size, 3))
     wsum = np.zeros((size, size))
+    # ความถี่สูงมาจากมุมที่หันตรงที่สุด เพราะการเฉลี่ยภาพที่ทาบกันไม่สนิท
+    # คือการทำให้เบลอ แต่ "เลือกมุมเดียวที่ชนะ" ก็แรงเกินไป: ตรงที่สองมุมคะแนน
+    # ก้ำกึ่งกัน ผู้ชนะจะสลับไปมาเป็นหย่อม ๆ ได้รอยต่อหยักและดูดพิกเซลที่ฉาย
+    # ผิด (ผิวแขนไปตกบนเสื้อ) เข้ามาเต็ม ๆ แทนที่จะถูกเฉลี่ยจนจาง
+    #
+    # เลยใช้ค่าเฉลี่ยที่ถ่วงด้วย w^sharpness แทน ยกกำลังสูง ๆ ทำให้มุมที่ดีที่สุด
+    # กินน้ำหนักเกือบทั้งหมด (ได้ความคมเท่าผู้ชนะ) แต่ตรงที่คะแนนก้ำกึ่ง
+    # มันยังเกลี่ยให้ จึงไม่มีรอยต่อหยัก — อัตราส่วนนี้ไม่ขึ้นกับสเกลของ w
+    # จึงไม่ต้องนอร์มอลไลซ์ก่อน
+    acc_hi = np.zeros((size, size, 3))
+    wsum_hi = np.zeros((size, size))
     flat_pos = pos[hit]
     flat_nrm = nrm[hit]
 
@@ -570,12 +620,46 @@ def main() -> None:
         lin = srgb_to_linear(rgb)
         acc[hit] += lin * w[..., None]
         wsum[hit] += w
+        w_hi = w ** args.sharpness
+        acc_hi[hit] += lin * w_hi[..., None]
+        wsum_hi[hit] += w_hi
         say(f"  ฉาย {name} ครอบคลุม {100 * (w > 0).mean():.0f}% ของเท็กเซล")
 
     covered = wsum > 1e-6
-    color = np.zeros((size, size, 3))
-    color[covered] = acc[covered] / wsum[covered][..., None]
+    mean_c = np.zeros((size, size, 3))
+    mean_c[covered] = acc[covered] / wsum[covered][..., None]
     say(f"เท็กเซลที่ได้สี {100 * covered.sum() / max(hit.sum(), 1):.1f}% ของที่ใช้จริง")
+
+    if args.lowband > 0:
+        # --- multi-band blending ---------------------------------------
+        # ค่าเฉลี่ยถ่วงน้ำหนักให้สีพื้นที่ไม่มีรอยต่อ แต่เบลอ เพราะภาพแต่ละใบ
+        # ทาบกันไม่สนิทระดับพิกเซล ส่วนมุมที่ชนะมุมเดียวให้รายละเอียดคมแต่มี
+        # รอยต่อ เพราะ exposure กับเงาของแต่ละใบไม่เท่ากัน
+        #
+        # เอาข้อดีทั้งคู่โดยแยกความถี่: ยืนพื้นด้วยภาพที่คม แล้วบวกด้วย
+        # "ส่วนต่างระหว่างค่าเฉลี่ยกับภาพคม" ที่เบลอจนเหลือแต่ความถี่ต่ำ
+        #
+        #     ผล = คม + blur(เฉลี่ย - คม)
+        #
+        # ส่วนต่างนั้นคือค่าชดเชย exposure/เงา ซึ่งเปลี่ยนช้า ๆ ทั่วผิว
+        # เบลอแล้วจึงไม่กินรายละเอียด และเพราะมันเป็นค่าที่เล็กและเรียบอยู่แล้ว
+        # การที่รัศมีเบลอล้นข้ามเกาะ UV จึงส่งผลเป็นอันดับสอง ไม่ใช่สีเพี้ยน
+        # แบบที่จะเกิดถ้าเบลอตัวสีตรง ๆ
+        sharp_img = np.zeros((size, size, 3))
+        hot = wsum_hi > 1e-12
+        sharp_img[hot] = acc_hi[hot] / wsum_hi[hot][..., None]
+        # เขียนอีกแบบที่เท่ากันทางพีชคณิต: คม + blur(เฉลี่ย - คม)
+        #                                 = blur(เฉลี่ย) + [คม - blur(คม)]
+        # แบบหลังแยก "ความถี่สูง" ออกมาเป็นก้อนเดียวให้จับต้องได้ จึงคุมมันได้
+        low = blur_masked(mean_c, covered, args.lowband)
+        detail = sharp_img - blur_masked(sharp_img, covered, args.lowband)
+        color = np.where(covered[..., None], low + detail, 0.0)
+        color = np.clip(color, 0.0, None)
+        say(f"multi-band: สีพื้นจากค่าเฉลี่ย รายละเอียดถ่วงด้วย "
+            f"w^{args.sharpness:g} (รัศมีเบลอ {args.lowband} พิกเซล)")
+    else:
+        color = mean_c
+        say("multi-band: ปิดอยู่ ใช้ค่าเฉลี่ยถ่วงน้ำหนักล้วน")
 
     color = dilate(color, covered, rounds=48)
     rgba = np.concatenate([linear_to_srgb(color), np.ones((size, size, 1))], axis=2)
