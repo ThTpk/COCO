@@ -78,6 +78,18 @@ NAME_MAP.update({f"Tail{i + 1}": f"tail_{i}" for i in range(N_TAIL)})
 # ยกเท้าสูงแค่ไหน ถ้าหารลงทั้งขาเท้าจะไถไปกับพื้นยิ่งกว่าเดิม
 SWING_BONES = {"LeftUpLeg", "RightUpLeg"}
 
+# เข่าเป็นตัวกำหนดว่ายกเท้าพ้นพื้นแค่ไหน แยกคันโยกไว้ต่างหากจากต้นขาเพราะ
+# ทิศที่ UniRig วางเข่าไว้ทำให้มุมงอเท่ากันยกเท้าได้น้อยกว่าโครงของ autorig
+KNEE_BONES = {"LeftLeg", "RightLeg"}
+
+# ข้อเท้าเป็นตัวที่ทำให้ "ก้าว" ดูออก วัดเทียบกับโมเดลที่ 6: ที่นั่นปลายเท้า
+# ยกขึ้น 0.298 ขณะที่ข้อเท้ายกแค่ 0.057 คือเท้าตะแคงขึ้นลงรับพื้น ส่วนของ
+# UniRig ปลายเท้ายก 0.122 น้อยกว่าข้อเท้าเสียอีก เท้าจึงแข็งเป็นแผ่นเดียว
+# ลากไปกับพื้น ตัวคูณนี้เปิดมุมข้อเท้าให้เท้าพลิกได้เหมือนกัน ค่า 4.0 ทำให้
+# ปลายเท้ายก 0.297 เท่ากับ 0.298 ของโมเดลที่ 6 โดยความยาวก้าวแทบไม่ขยับ
+# (0.652 -> 0.668) เพราะข้อเท้าหมุนอยู่กับที่ ไม่ได้พาขาไปข้างหน้า
+FOOT_BONES = {"LeftFoot", "RightFoot"}
+
 
 def say(msg: str) -> None:
     print(f"[anim] {msg}", flush=True)
@@ -90,7 +102,9 @@ def armature() -> object:
     return arms[0]
 
 
-def translate(payload: dict, bones: set[str], leg_scale: float) -> dict:
+def translate(payload: dict, bones: set[str],
+              leg_scale: float, knee_scale: float,
+              foot_scale: float) -> dict:
     """เปลี่ยนชื่อกระดูกในชุดคลิปจากแบบ Mixamo เป็นชื่อจริงในไฟล์
 
     channel ที่หาชื่อปลายทางไม่เจอจะถูกตัดทิ้งตรงนี้ แทนที่จะปล่อยให้ไปเงียบ
@@ -105,9 +119,12 @@ def translate(payload: dict, bones: set[str], leg_scale: float) -> dict:
                 dropped.add(ch["bone"])
                 continue
             out = {**ch, "bone": name}
-            if leg_scale != 1.0 and ch["bone"] in SWING_BONES:
-                out["amp"] = ch.get("amp", 0.0) * leg_scale
-                out["offset"] = ch.get("offset", 0.0) * leg_scale
+            k = (leg_scale if ch["bone"] in SWING_BONES else
+                 knee_scale if ch["bone"] in KNEE_BONES else
+                 foot_scale if ch["bone"] in FOOT_BONES else 1.0)
+            if k != 1.0:
+                out["amp"] = ch.get("amp", 0.0) * k
+                out["offset"] = ch.get("offset", 0.0) * k
             kept.append(out)
         clip["channels"] = kept
         say(f"clip {clip['name']}: {len(kept)} channel")
@@ -128,6 +145,10 @@ def main() -> None:
     ap.add_argument("--fps", type=int, default=24)
     ap.add_argument("--leg-scale", type=float, default=0.55,
                     help="ตัวคูณช่วงการแกว่งต้นขา ให้ก้าวเท่าโมเดลที่ 6")
+    ap.add_argument("--knee-scale", type=float, default=1.0,
+                    help="ตัวคูณมุมงอเข่า")
+    ap.add_argument("--foot-scale", type=float, default=4.0,
+                    help="ตัวคูณมุมข้อเท้า ให้ปลายเท้ายกสูงเท่าโมเดลที่ 6")
     args = ap.parse_args(argv)
 
     meshes = glb_slim.load(args.src)
@@ -141,8 +162,9 @@ def main() -> None:
     bones = {b.name for b in arm.data.bones}
     say(f"armature {arm.name}: {len(bones)} กระดูก")
 
-    payload = translate(autorig.clips(N_TAIL, fps=args.fps), bones, args.leg_scale)
-    say(f"ตัวคูณช่วงต้นขา {args.leg_scale}")
+    payload = translate(autorig.clips(N_TAIL, fps=args.fps), bones, args.leg_scale, args.knee_scale,
+                        args.foot_scale)
+    say(f"ตัวคูณต้นขา {args.leg_scale} เข่า {args.knee_scale} ข้อเท้า {args.foot_scale}")
     made = blender_rig.apply_clips(arm, payload)
     say(f"สร้างอนิเมชัน {len(made)} clip: {', '.join(made)}")
 
