@@ -8,10 +8,10 @@
 ต่างจาก tools/autorig.py ตรงที่ไม่ได้สร้างกระดูกเอง ไฟล์ที่เข้ามามีกระดูกจาก
 UniRig อยู่แล้ว ขาดแค่คลิป งานที่นี่จึงเหลือแค่ "บอกให้ถูกว่ากระดูกไหนคืออะไร"
 
-ปัญหาเดียวที่ต้องแก้คือชื่อ UniRig ตั้งชื่อกระดูกว่า bone_0..bone_39 ตามลำดับ
+ปัญหาเดียวที่ต้องแก้คือชื่อ UniRig ตั้งชื่อกระดูกว่า bone_0..bone_N ตามลำดับ
 ที่มันไล่โครงออกมา ไม่ได้บอกว่าอันไหนคือต้นขาอันไหนคือข้อศอก ส่วนชุดคลิปใน
 autorig.clips() เขียนด้วยชื่อแบบ Mixamo (LeftUpLeg, RightForeArm, ...) ไฟล์นี้
-จึงเป็นตารางแปลชื่อระหว่างสองฝั่ง อ่านจากตำแหน่งกระดูกในไฟล์จริง
+จึงเป็นตารางแปลชื่อระหว่างสองฝั่ง สร้างขึ้นสด ๆ จากรูปทรงของโครงในไฟล์
 
 ระบบแกนตรงกับที่ autorig สมมติไว้พอดี ไม่ต้องกลับเครื่องหมายใด ๆ: ใน Blender
 ตัวละครหันหน้าไป -Y, +Z ขึ้น, +X คือด้านซ้ายของตัวละคร ตรวจจากไฟล์ได้สามทาง
@@ -33,39 +33,84 @@ import autorig          # noqa: E402  ชุดคลิปกลาง ใช�
 import blender_rig      # noqa: E402  ตัวอบ keyframe + export
 import glb_slim         # noqa: E402  weld / smooth / บีบ texture
 
-# ตารางแปลชื่อ อ่านจากตำแหน่งหัวกระดูกใน croc_photo_unirig_textured.glb
-# (พิกัดในวงเล็บคือพิกัดแบบ Blender: +X ซ้ายของตัวละคร, -Y หน้า, +Z ขึ้น)
-NAME_MAP: dict[str, str] = {
-    # แกนกลาง: bone_0 อยู่ระดับสะโพก (z -0.07) ไล่ขึ้นไปจบที่หัว (z +0.69)
-    "Hips": "bone_0",
-    "Spine": "bone_1",
-    "Spine1": "bone_2",
-    "Spine2": "bone_3",          # ระดับอก เป็นที่ที่แขนสองข้างแตกออกไป
-    "Neck": "bone_4",
-    "Head": "bone_5",
-    # แขนซ้าย: ไหล่ -> ต้นแขน -> ปลายแขน -> มือ (มือมีสามนิ้วแตกต่อไป)
-    "LeftShoulder": "bone_6",
-    "LeftArm": "bone_7",
-    "LeftForeArm": "bone_8",
-    "LeftHand": "bone_9",
-    "RightShoulder": "bone_19",
-    "RightArm": "bone_20",
-    "RightForeArm": "bone_21",
-    "RightHand": "bone_22",
-    # ขาซ้าย: สะโพก (z -0.13) -> เข่า (-0.50) -> ข้อเท้า (-0.82) -> ปลายเท้า
-    "LeftUpLeg": "bone_32",
-    "LeftLeg": "bone_33",
-    "LeftFoot": "bone_34",
-    "LeftToeBase": "bone_35",
-    "RightUpLeg": "bone_36",
-    "RightLeg": "bone_37",
-    "RightFoot": "bone_38",
-    "RightToeBase": "bone_39",
-}
+# ลำดับเลขของ UniRig ไม่คงที่ข้ามการรัน รอบแรกได้ 47 ข้อต่อ มือข้างละสามนิ้ว
+# ขาซ้ายเริ่มที่ bone_32 รอบที่สองบน mesh ที่ปรับสัดส่วนแล้วได้ 35 ข้อต่อ
+# ขาซ้ายเลื่อนมาอยู่ที่ bone_20 ตารางที่แข็งค่าไว้จึงใช้ได้รอบเดียวแล้วพัง
+# เงียบ ๆ (คลิปยังสร้างได้ แต่ไปหมุนกระดูกผิดตัว) ที่นี่เลยไล่โครงเอาเองทุกครั้ง
+def build_map(arm) -> tuple[dict[str, str], int]:
+    """อ่านโครงกระดูกจากรูปทรงของมันเอง แล้วคืนตารางแปลชื่อแบบ Mixamo
 
-# หางของ UniRig นับจาก 0 ส่วน autorig.tail_wave ออกชื่อ Tail1..TailN
-N_TAIL = 6
-NAME_MAP.update({f"Tail{i + 1}": f"tail_{i}" for i in range(N_TAIL)})
+    อาศัยสามอย่างที่จริงไม่ว่า UniRig จะนับเลขอย่างไร: สะโพกคือรากที่มีลูก,
+    อกคือกระดูกบนแกนกลางที่แตกออกสามทาง (คอกับแขนสองข้าง) และ +X คือข้างซ้าย
+    ของตัวละคร ส่วนหางดูจากชื่อ เพราะ UniRig ตั้งชื่อ tail_* ไว้ให้แล้ว
+
+    ถ้าโครงไม่เข้ารูปที่คาด จะหยุดพร้อมบอกว่าสะดุดตรงไหน ดีกว่าปล่อยให้แปลผิด
+    แล้วได้คลิปที่ขยับกระดูกคนละอันกับที่ตั้งใจ
+    """
+    P = {b.name: arm.matrix_world @ b.head_local for b in arm.data.bones}
+    kids = {b.name: [c.name for c in b.children] for b in arm.data.bones}
+    body = lambda n: not n.startswith("tail_")
+
+    tails = sorted((n for n in P if n.startswith("tail_")),
+                   key=lambda n: int(n.rsplit("_", 1)[1]))
+
+    roots = [b.name for b in arm.data.bones if b.parent is None and kids[b.name]]
+    if len(roots) != 1:
+        raise SystemExit(f"ต้องมีรากที่มีลูกอันเดียว แต่เจอ {roots}")
+    hips = roots[0]
+
+    def chain(start: str, n: int) -> list[str]:
+        """ไล่ลงไปตามกิ่ง เลือกลูกที่อยู่ไกลที่สุดเมื่อมีให้เลือกหลายตัว"""
+        out = [start]
+        while len(out) < n:
+            ks = [k for k in kids[out[-1]] if body(k)]
+            if not ks:
+                raise SystemExit(f"กิ่งจาก {start} สั้นกว่าที่ต้องการ ({out})")
+            out.append(max(ks, key=lambda k: (P[k] - P[out[-1]]).length))
+        return out
+
+    up = [k for k in kids[hips] if body(k) and P[k].z > P[hips].z]
+    if len(up) != 1:
+        raise SystemExit(f"ต้องมีแกนกลางเส้นเดียวขึ้นจากสะโพก แต่เจอ {up}")
+    spine, cur = [hips], up[0]
+    while True:
+        spine.append(cur)
+        ks = [k for k in kids[cur] if body(k)]
+        if len(ks) >= 3:          # ถึงอกแล้ว คอกับแขนสองข้างแตกจากที่นี่
+            break
+        if len(ks) != 1:
+            raise SystemExit(f"แกนกลางขาดตอนที่ {cur} (ลูก {ks})")
+        cur = ks[0]
+    if len(spine) != 4:
+        raise SystemExit(f"คาดว่าแกนกลางถึงอกมีสี่ข้อ แต่ได้ {spine}")
+
+    branches = [k for k in kids[spine[-1]] if body(k)]
+    neck = min(branches, key=lambda k: abs(P[k].x))     # คออยู่กลางลำตัว
+    arms = [k for k in branches if k != neck]
+    if len(arms) != 2:
+        raise SystemExit(f"ที่อกต้องแตกเป็นคอกับแขนสองข้าง แต่เจอ {branches}")
+    legs = [k for k in kids[hips] if body(k) and P[k].z < P[hips].z]
+    if len(legs) != 2:
+        raise SystemExit(f"ต้องมีขาสองข้างใต้สะโพก แต่เจอ {legs}")
+
+    sides = lambda ns: (max(ns, key=lambda k: P[k].x), min(ns, key=lambda k: P[k].x))
+    m = dict(zip(("Hips", "Spine", "Spine1", "Spine2"), spine))
+    m["Neck"], m["Head"] = chain(neck, 2)
+    for pre, start in zip(("Left", "Right"), sides(arms)):
+        m.update(zip((f"{pre}Shoulder", f"{pre}Arm", f"{pre}ForeArm", f"{pre}Hand"),
+                     chain(start, 4)))
+    for pre, start in zip(("Left", "Right"), sides(legs)):
+        m.update(zip((f"{pre}UpLeg", f"{pre}Leg", f"{pre}Foot", f"{pre}ToeBase"),
+                     chain(start, 4)))
+    # หางของ UniRig นับจาก 0 ส่วน autorig.tail_wave ออกชื่อ Tail1..TailN
+    m.update({f"Tail{i + 1}": n for i, n in enumerate(tails)})
+
+    # กันกรณีที่เงียบที่สุด: ซ้ายขวาสลับกันแล้วเดินถอยหลังโดยไม่มีใครสังเกต
+    if not (P[m["LeftUpLeg"]].x > 0 > P[m["RightUpLeg"]].x):
+        raise SystemExit("ขาซ้าย/ขวาสลับข้าง — +X ควรเป็นข้างซ้ายของตัวละคร")
+    if P[m["LeftToeBase"]].y > P[m["LeftFoot"]].y:
+        raise SystemExit("ปลายเท้าควรอยู่หน้าข้อเท้า (-Y คือทิศที่ตัวละครหัน)")
+    return m, len(tails)
 
 
 # กระดูกขาของ UniRig วางยาวกว่าและชี้คนละมุมกับโครงที่ autorig สร้างเอง มุม
@@ -102,7 +147,7 @@ def armature() -> object:
     return arms[0]
 
 
-def translate(payload: dict, bones: set[str],
+def translate(payload: dict, name_map: dict[str, str], bones: set[str],
               leg_scale: float, knee_scale: float,
               foot_scale: float) -> dict:
     """เปลี่ยนชื่อกระดูกในชุดคลิปจากแบบ Mixamo เป็นชื่อจริงในไฟล์
@@ -114,7 +159,7 @@ def translate(payload: dict, bones: set[str],
     for clip in payload.get("clips", []):
         kept = []
         for ch in clip.get("channels", []):
-            name = NAME_MAP.get(ch["bone"])
+            name = name_map.get(ch["bone"])
             if name is None or name not in bones:
                 dropped.add(ch["bone"])
                 continue
@@ -162,8 +207,12 @@ def main() -> None:
     bones = {b.name for b in arm.data.bones}
     say(f"armature {arm.name}: {len(bones)} กระดูก")
 
-    payload = translate(autorig.clips(N_TAIL, fps=args.fps), bones, args.leg_scale, args.knee_scale,
-                        args.foot_scale)
+    name_map, n_tail = build_map(arm)
+    say(f"ไล่โครงได้ {len(name_map)} ข้อต่อ หาง {n_tail} ปล้อง: "
+        + ", ".join(f"{k}={v}" for k, v in name_map.items()))
+
+    payload = translate(autorig.clips(n_tail, fps=args.fps), name_map, bones,
+                        args.leg_scale, args.knee_scale, args.foot_scale)
     say(f"ตัวคูณต้นขา {args.leg_scale} เข่า {args.knee_scale} ข้อเท้า {args.foot_scale}")
     made = blender_rig.apply_clips(arm, payload)
     say(f"สร้างอนิเมชัน {len(made)} clip: {', '.join(made)}")
