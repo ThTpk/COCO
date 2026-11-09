@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>2Dto3D — Crocodile</title>
-<meta name="description" content="หกโมเดล 3D ของตัวละครเดียวกัน สร้างจากภาพ 2D คนละวิธี เทียบกันได้ในหน้าเดียว">
+<meta name="description" content="เจ็ดโมเดล 3D ของตัวละครเดียวกัน สร้างจากภาพ 2D คนละวิธี เทียบกันได้ในหน้าเดียว">
 <style>
   :root {
     color-scheme: dark;
@@ -130,7 +130,7 @@
 
 <header>
   <h1>2Dto3D</h1>
-  <span class="sub">ตัวละครเดียวกัน หกวิธี สร้างจากภาพ 2D ชุดเดิม</span>
+  <span class="sub">ตัวละครเดียวกัน เจ็ดวิธี สร้างจากภาพ 2D ชุดเดิม</span>
   <span class="spacer"></span>
   <a href="https://github.com/ThTpk/COCO">source บน GitHub</a>
 </header>
@@ -166,7 +166,7 @@
 </footer>
 
 <script type="module">
-  // หกเส้นทางที่ลองมาตามลำดับเวลา เก็บไว้ครบเพื่อให้เทียบกันได้ว่าแต่ละวิธีได้อะไรมา
+  // เจ็ดเส้นทางที่ลองมาตามลำดับเวลา เก็บไว้ครบเพื่อให้เทียบกันได้ว่าแต่ละวิธีได้อะไรมา
   const MODELS = [
     {
       file: 'output/character_rigged.glb',
@@ -214,6 +214,17 @@
            'ที่ถูกส่วนอื่นบังออกด้วย z-buffer — ไม่งั้นแขนในภาพจะไปตกบนเสื้อ ' +
            'กลายเป็นผิวสีส้มเปื้อนอยู่บนผ้ายีนส์ แล้วใส่โครงกระดูกด้วย ' +
            'tools/autorig.py เหมือนโมเดลที่ 5',
+    },
+    {
+      file: 'output/croc_photo_unirig_rigged.glb',
+      label: 'UniRig',
+      note: 'กระดูกจากโมเดล generative',
+      how: 'mesh ก้อนเดียวกับโมเดลที่ 6 ทั้ง 334,964 หน้า แต่เปลี่ยนคนใส่กระดูก ' +
+           'จาก tools/autorig.py ที่เขียนกฎวางข้อต่อไว้เอง มาเป็น UniRig ' +
+           '(SIGGRAPH 2025) บน ComfyUI ซึ่งทำนายทั้งโครงกระดูกและ weight จากตัว ' +
+           'mesh เอง ได้ 47 ข้อต่อ มากกว่าเดิมที่มี 29 รวมถึงนิ้วมือข้างละสามนิ้ว ' +
+           'และหางที่แยกเป็นหกปล้อง แต่ได้มาเป็นท่าพักเปล่า ๆ ยังไม่มีคลิป ' +
+           'อนิเมชันติดมาด้วย',
     },
   ];
 

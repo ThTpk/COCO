@@ -38,6 +38,55 @@ def load(path: Path):
     return meshes
 
 
+def weld(obj, dist: float) -> None:
+    """เชื่อมจุดยอดที่ทับกันให้เป็นจุดเดียว โดยไม่ลดจำนวนหน้า
+
+    ไฟล์ที่ออกจาก UniRig แยกจุดยอดของทุกหน้าออกจากกันหมด สามเหลี่ยม 335,000
+    หน้าจึงพามา 1,000,000 จุด แทนที่จะเป็น 215,000 จุดอย่างตัวที่ rig เอง
+    Draco บีบ "จุดที่ไม่มีใครใช้ร่วม" ไม่ลง ไฟล์เลยใหญ่กว่ากันเกือบสี่เท่า
+    ทั้งที่เป็น mesh เดียวกัน
+
+    UV ของ Blender เก็บไว้ที่ loop ไม่ใช่ที่ vertex รอยต่อ UV จึงรอดจากการ
+    เชื่อม และระยะเริ่มต้นเล็กมาก (1e-6) จะแตะเฉพาะจุดที่ทับกันสนิทจริง ๆ
+    """
+    if dist <= 0:
+        return
+    before = len(obj.data.vertices)
+    faces = len(obj.data.polygons)
+    bpy.context.view_layer.objects.active = obj
+    bpy.ops.object.select_all(action="DESELECT")
+    obj.select_set(True)
+    bpy.ops.object.mode_set(mode="EDIT")
+    bpy.ops.mesh.select_all(action="SELECT")
+    bpy.ops.mesh.remove_doubles(threshold=dist)
+    bpy.ops.object.mode_set(mode="OBJECT")
+    say(f"เชื่อมจุด {before} -> {len(obj.data.vertices)} "
+        f"(หน้า {faces} -> {len(obj.data.polygons)})")
+
+
+def smooth(obj) -> None:
+    """เกลี่ย normal ให้เรียบ และทิ้ง custom split normal ที่ตรึงมันไว้
+
+    UniRig ส่ง mesh ออกมาแบบ flat ทุกหน้า คือทั้งสามจุดของสามเหลี่ยมถือ
+    normal ของหน้านั้นเหมือนกัน ผลสองอย่างตามมา: ผิวเป็นเหลี่ยมเห็นชัดเวลา
+    แสงไล่ และ "จุดเดียวกันถือ normal คนละค่า" บังคับให้ตัว export แยกจุด
+    กลับออกมาหมดหลังเชื่อมเสร็จ Draco จึงยังบีบไม่ลง
+
+    ล้าง custom split normal ก่อนแล้วสั่ง shade smooth จึงได้ทั้งผิวเรียบ
+    เท่าโมเดลที่ 6 ซึ่งเป็น mesh ก้อนเดียวกัน และได้จุดยอดที่ใช้ร่วมกันจริง
+    """
+    bpy.context.view_layer.objects.active = obj
+    bpy.ops.object.select_all(action="DESELECT")
+    obj.select_set(True)
+    try:
+        bpy.ops.mesh.customdata_custom_splitnormals_clear()
+    except RuntimeError:
+        pass          # ไฟล์ที่ไม่มี custom normal อยู่แล้ว ข้ามไป
+    for poly in obj.data.polygons:
+        poly.use_smooth = True
+    say(f"{obj.name}: shade smooth")
+
+
 def decimate(obj, target: int) -> None:
     faces = len(obj.data.polygons)
     if target <= 0 or target >= faces:
@@ -145,6 +194,10 @@ def main() -> None:
     ap.add_argument("--src", type=Path, required=True)
     ap.add_argument("--dst", type=Path, required=True)
     ap.add_argument("--faces", type=int, default=0, help="จำนวนหน้าเป้าหมาย 0 = ไม่ลด")
+    ap.add_argument("--merge", type=float, default=0.0,
+                    help="ระยะเชื่อมจุดยอดที่ทับกัน 0 = ไม่เชื่อม (ลองที่ 1e-6)")
+    ap.add_argument("--smooth", action="store_true",
+                    help="เกลี่ย normal ให้เรียบ (ใช้กับไฟล์ที่มาแบบ flat ทุกหน้า)")
     ap.add_argument("--draco", action="store_true")
     ap.add_argument("--draco-level", type=int, default=6)
     ap.add_argument("--jpeg", type=int, default=0, help="คุณภาพ JPEG 0 = คง PNG ไว้")
@@ -159,6 +212,9 @@ def main() -> None:
     before = args.src.stat().st_size
     for obj in meshes:
         say(f"{obj.name}: {len(obj.data.vertices)} จุด {len(obj.data.polygons)} หน้า")
+        weld(obj, args.merge)
+        if args.smooth:
+            smooth(obj)
         decimate(obj, args.faces)
 
     if args.jpeg or args.map_jpeg or args.tex_size or args.map_size:
