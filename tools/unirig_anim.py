@@ -187,6 +187,12 @@ def main() -> None:
     ap.add_argument("--smooth", action="store_true")
     ap.add_argument("--draco", action="store_true")
     ap.add_argument("--jpeg", type=int, default=0)
+    # normal map เก็บตัวเลขไว้ในช่องสี ไม่ใช่ภาพให้ตาคนดู กดคุณภาพแรงเท่าสีไม่ได้
+    # เพราะ artifact จะโผล่เป็นคลื่นบนผิว จึงแยกคันโยกไว้คนละตัวกับ --jpeg
+    ap.add_argument("--map-jpeg", type=int, default=0,
+                    help="คุณภาพ JPEG ของ normal/roughness map 0 = คง PNG ไว้")
+    ap.add_argument("--map-size", type=int, default=0,
+                    help="ย่อ normal/roughness map ลงเหลือกี่พิกเซล 0 = ไม่ย่อ")
     ap.add_argument("--fps", type=int, default=24)
     ap.add_argument("--leg-scale", type=float, default=0.55,
                     help="ตัวคูณช่วงการแกว่งต้นขา ให้ก้าวเท่าโมเดลที่ 6")
@@ -217,8 +223,8 @@ def main() -> None:
     made = blender_rig.apply_clips(arm, payload)
     say(f"สร้างอนิเมชัน {len(made)} clip: {', '.join(made)}")
 
-    if args.jpeg:
-        glb_slim.shrink_images(args.jpeg, 0, 0, 0)
+    if args.jpeg or args.map_jpeg or args.map_size:
+        glb_slim.shrink_images(args.jpeg, args.map_jpeg, 0, args.map_size)
 
     blender_rig.export_glb(args.dst, args.draco)
     after = args.dst.stat().st_size
