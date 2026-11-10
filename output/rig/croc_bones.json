@@ -1,0 +1,707 @@
+[
+ {
+  "name": "root",
+  "head": [
+   -0.02,
+   -0.9,
+   0.06
+  ],
+  "tail": [
+   -0.02,
+   -0.7,
+   0.06
+  ],
+  "parent": null,
+  "deform": false
+ },
+ {
+  "name": "hips",
+  "head": [
+   -0.02,
+   -0.08,
+   0.06
+  ],
+  "tail": [
+   -0.02,
+   0.12,
+   0.06
+  ],
+  "parent": "root",
+  "deform": true
+ },
+ {
+  "name": "spine",
+  "head": [
+   -0.02,
+   0.12,
+   0.06
+  ],
+  "tail": [
+   -0.02,
+   0.3,
+   0.06
+  ],
+  "parent": "hips",
+  "deform": true
+ },
+ {
+  "name": "chest",
+  "head": [
+   -0.02,
+   0.3,
+   0.06
+  ],
+  "tail": [
+   -0.02,
+   0.48,
+   0.06
+  ],
+  "parent": "spine",
+  "deform": true
+ },
+ {
+  "name": "neck",
+  "head": [
+   -0.02,
+   0.52,
+   0.05
+  ],
+  "tail": [
+   -0.02,
+   0.66,
+   0.06
+  ],
+  "parent": "chest",
+  "deform": true
+ },
+ {
+  "name": "head",
+  "head": [
+   -0.02,
+   0.66,
+   0.06
+  ],
+  "tail": [
+   -0.02,
+   0.88,
+   0.1
+  ],
+  "parent": "neck",
+  "deform": true
+ },
+ {
+  "name": "jaw",
+  "head": [
+   -0.02,
+   0.665,
+   0.12
+  ],
+  "tail": [
+   -0.02,
+   0.62,
+   0.38
+  ],
+  "parent": "head",
+  "deform": true
+ },
+ {
+  "name": "shoulder.L",
+  "head": [
+   0.06,
+   0.52,
+   0.06
+  ],
+  "tail": [
+   0.3,
+   0.5,
+   0.05
+  ],
+  "parent": "chest",
+  "deform": true
+ },
+ {
+  "name": "upper_arm.L",
+  "head": [
+   0.31,
+   0.47,
+   0.06
+  ],
+  "tail": [
+   0.57,
+   0.41,
+   0.065
+  ],
+  "parent": "shoulder.L",
+  "deform": true
+ },
+ {
+  "name": "forearm.L",
+  "head": [
+   0.57,
+   0.41,
+   0.065
+  ],
+  "tail": [
+   0.775,
+   0.39,
+   0.183
+  ],
+  "parent": "upper_arm.L",
+  "deform": true
+ },
+ {
+  "name": "hand.L",
+  "head": [
+   0.775,
+   0.39,
+   0.183
+  ],
+  "tail": [
+   0.885,
+   0.37,
+   0.228
+  ],
+  "parent": "forearm.L",
+  "deform": true
+ },
+ {
+  "name": "thumb.01.L",
+  "head": [
+   0.8,
+   0.42,
+   0.22
+  ],
+  "tail": [
+   0.835,
+   0.46,
+   0.28
+  ],
+  "parent": "hand.L",
+  "deform": true
+ },
+ {
+  "name": "thumb.02.L",
+  "head": [
+   0.835,
+   0.46,
+   0.28
+  ],
+  "tail": [
+   0.865,
+   0.49,
+   0.325
+  ],
+  "parent": "thumb.01.L",
+  "deform": true
+ },
+ {
+  "name": "finger1.01.L",
+  "head": [
+   0.885,
+   0.42,
+   0.245
+  ],
+  "tail": [
+   0.9125,
+   0.42,
+   0.265
+  ],
+  "parent": "hand.L",
+  "deform": true
+ },
+ {
+  "name": "finger1.02.L",
+  "head": [
+   0.9125,
+   0.42,
+   0.265
+  ],
+  "tail": [
+   0.94,
+   0.42,
+   0.28
+  ],
+  "parent": "finger1.01.L",
+  "deform": true
+ },
+ {
+  "name": "finger2.01.L",
+  "head": [
+   0.885,
+   0.37,
+   0.22999999999999998
+  ],
+  "tail": [
+   0.9125,
+   0.37,
+   0.25
+  ],
+  "parent": "hand.L",
+  "deform": true
+ },
+ {
+  "name": "finger2.02.L",
+  "head": [
+   0.9125,
+   0.37,
+   0.25
+  ],
+  "tail": [
+   0.94,
+   0.37,
+   0.265
+  ],
+  "parent": "finger2.01.L",
+  "deform": true
+ },
+ {
+  "name": "finger3.01.L",
+  "head": [
+   0.885,
+   0.325,
+   0.22999999999999998
+  ],
+  "tail": [
+   0.9125,
+   0.325,
+   0.25
+  ],
+  "parent": "hand.L",
+  "deform": true
+ },
+ {
+  "name": "finger3.02.L",
+  "head": [
+   0.9125,
+   0.325,
+   0.25
+  ],
+  "tail": [
+   0.94,
+   0.325,
+   0.265
+  ],
+  "parent": "finger3.01.L",
+  "deform": true
+ },
+ {
+  "name": "thigh.L",
+  "head": [
+   0.135,
+   -0.1,
+   0.06
+  ],
+  "tail": [
+   0.154,
+   -0.45,
+   0.1
+  ],
+  "parent": "hips",
+  "deform": true
+ },
+ {
+  "name": "shin.L",
+  "head": [
+   0.154,
+   -0.45,
+   0.1
+  ],
+  "tail": [
+   0.195,
+   -0.8,
+   0.075
+  ],
+  "parent": "thigh.L",
+  "deform": true
+ },
+ {
+  "name": "foot.L",
+  "head": [
+   0.195,
+   -0.8,
+   0.075
+  ],
+  "tail": [
+   0.21100000000000002,
+   -0.86,
+   0.22
+  ],
+  "parent": "shin.L",
+  "deform": true
+ },
+ {
+  "name": "toe.L",
+  "head": [
+   0.21100000000000002,
+   -0.86,
+   0.22
+  ],
+  "tail": [
+   0.227,
+   -0.87,
+   0.33
+  ],
+  "parent": "foot.L",
+  "deform": true
+ },
+ {
+  "name": "shoulder.R",
+  "head": [
+   -0.06,
+   0.52,
+   0.06
+  ],
+  "tail": [
+   -0.3,
+   0.5,
+   0.05
+  ],
+  "parent": "chest",
+  "deform": true
+ },
+ {
+  "name": "upper_arm.R",
+  "head": [
+   -0.31,
+   0.47,
+   0.06
+  ],
+  "tail": [
+   -0.57,
+   0.41,
+   0.065
+  ],
+  "parent": "shoulder.R",
+  "deform": true
+ },
+ {
+  "name": "forearm.R",
+  "head": [
+   -0.57,
+   0.41,
+   0.065
+  ],
+  "tail": [
+   -0.775,
+   0.39,
+   0.183
+  ],
+  "parent": "upper_arm.R",
+  "deform": true
+ },
+ {
+  "name": "hand.R",
+  "head": [
+   -0.775,
+   0.39,
+   0.183
+  ],
+  "tail": [
+   -0.885,
+   0.37,
+   0.228
+  ],
+  "parent": "forearm.R",
+  "deform": true
+ },
+ {
+  "name": "thumb.01.R",
+  "head": [
+   -0.8,
+   0.42,
+   0.22
+  ],
+  "tail": [
+   -0.835,
+   0.46,
+   0.28
+  ],
+  "parent": "hand.R",
+  "deform": true
+ },
+ {
+  "name": "thumb.02.R",
+  "head": [
+   -0.835,
+   0.46,
+   0.28
+  ],
+  "tail": [
+   -0.865,
+   0.49,
+   0.325
+  ],
+  "parent": "thumb.01.R",
+  "deform": true
+ },
+ {
+  "name": "finger1.01.R",
+  "head": [
+   -0.885,
+   0.42,
+   0.245
+  ],
+  "tail": [
+   -0.9299999999999999,
+   0.42,
+   0.265
+  ],
+  "parent": "hand.R",
+  "deform": true
+ },
+ {
+  "name": "finger1.02.R",
+  "head": [
+   -0.9299999999999999,
+   0.42,
+   0.265
+  ],
+  "tail": [
+   -0.975,
+   0.42,
+   0.28
+  ],
+  "parent": "finger1.01.R",
+  "deform": true
+ },
+ {
+  "name": "finger2.01.R",
+  "head": [
+   -0.885,
+   0.37,
+   0.22999999999999998
+  ],
+  "tail": [
+   -0.9299999999999999,
+   0.37,
+   0.25
+  ],
+  "parent": "hand.R",
+  "deform": true
+ },
+ {
+  "name": "finger2.02.R",
+  "head": [
+   -0.9299999999999999,
+   0.37,
+   0.25
+  ],
+  "tail": [
+   -0.975,
+   0.37,
+   0.265
+  ],
+  "parent": "finger2.01.R",
+  "deform": true
+ },
+ {
+  "name": "finger3.01.R",
+  "head": [
+   -0.885,
+   0.325,
+   0.22999999999999998
+  ],
+  "tail": [
+   -0.9299999999999999,
+   0.325,
+   0.25
+  ],
+  "parent": "hand.R",
+  "deform": true
+ },
+ {
+  "name": "finger3.02.R",
+  "head": [
+   -0.9299999999999999,
+   0.325,
+   0.25
+  ],
+  "tail": [
+   -0.975,
+   0.325,
+   0.265
+  ],
+  "parent": "finger3.01.R",
+  "deform": true
+ },
+ {
+  "name": "thigh.R",
+  "head": [
+   -0.16,
+   -0.1,
+   0.06
+  ],
+  "tail": [
+   -0.181,
+   -0.45,
+   0.1
+  ],
+  "parent": "hips",
+  "deform": true
+ },
+ {
+  "name": "shin.R",
+  "head": [
+   -0.181,
+   -0.45,
+   0.1
+  ],
+  "tail": [
+   -0.208,
+   -0.8,
+   0.075
+  ],
+  "parent": "thigh.R",
+  "deform": true
+ },
+ {
+  "name": "foot.R",
+  "head": [
+   -0.208,
+   -0.8,
+   0.075
+  ],
+  "tail": [
+   -0.22899999999999998,
+   -0.86,
+   0.22
+  ],
+  "parent": "shin.R",
+  "deform": true
+ },
+ {
+  "name": "toe.R",
+  "head": [
+   -0.22899999999999998,
+   -0.86,
+   0.22
+  ],
+  "tail": [
+   -0.25,
+   -0.87,
+   0.33
+  ],
+  "parent": "foot.R",
+  "deform": true
+ },
+ {
+  "name": "tail.01",
+  "head": [
+   -0.04,
+   -0.07,
+   -0.13
+  ],
+  "tail": [
+   -0.02,
+   -0.181,
+   -0.235
+  ],
+  "parent": "hips",
+  "deform": true
+ },
+ {
+  "name": "tail.02",
+  "head": [
+   -0.02,
+   -0.181,
+   -0.235
+  ],
+  "tail": [
+   0.032,
+   -0.281,
+   -0.273
+  ],
+  "parent": "tail.01",
+  "deform": true
+ },
+ {
+  "name": "tail.03",
+  "head": [
+   0.032,
+   -0.281,
+   -0.273
+  ],
+  "tail": [
+   0.074,
+   -0.385,
+   -0.316
+  ],
+  "parent": "tail.02",
+  "deform": true
+ },
+ {
+  "name": "tail.04",
+  "head": [
+   0.074,
+   -0.385,
+   -0.316
+  ],
+  "tail": [
+   0.137,
+   -0.474,
+   -0.346
+  ],
+  "parent": "tail.03",
+  "deform": true
+ },
+ {
+  "name": "tail.05",
+  "head": [
+   0.137,
+   -0.474,
+   -0.346
+  ],
+  "tail": [
+   0.244,
+   -0.539,
+   -0.384
+  ],
+  "parent": "tail.04",
+  "deform": true
+ },
+ {
+  "name": "tail.06",
+  "head": [
+   0.244,
+   -0.539,
+   -0.384
+  ],
+  "tail": [
+   0.359,
+   -0.602,
+   -0.398
+  ],
+  "parent": "tail.05",
+  "deform": true
+ },
+ {
+  "name": "tail.07",
+  "head": [
+   0.359,
+   -0.602,
+   -0.398
+  ],
+  "tail": [
+   0.484,
+   -0.66,
+   -0.384
+  ],
+  "parent": "tail.06",
+  "deform": true
+ },
+ {
+  "name": "tail.08",
+  "head": [
+   0.484,
+   -0.66,
+   -0.384
+  ],
+  "tail": [
+   0.575,
+   -0.75,
+   -0.35
+  ],
+  "parent": "tail.07",
+  "deform": true
+ }
+]
