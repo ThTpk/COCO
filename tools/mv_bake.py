@@ -79,7 +79,7 @@ def load_mesh(path: Path, weld: bool = True):
     return obj
 
 
-def unwrap(obj, margin: float, keep: bool) -> None:
+def unwrap(obj, margin: float, keep: bool, pack: bool = False) -> None:
     """กาง UV ใหม่ เว้นแต่สั่ง keep แล้วไฟล์มี UV ติดมาอยู่แล้ว
 
     ถ้า mesh ถูกกางมาดีอยู่แล้ว การกางซ้ำมีแต่เสีย — Smart UV Project ตัดเป็น
@@ -92,6 +92,18 @@ def unwrap(obj, margin: float, keep: bool) -> None:
     bpy.ops.object.mode_set(mode="EDIT")
     bpy.ops.mesh.select_all(action="SELECT")
     bpy.ops.uv.smart_project(angle_limit=math.radians(66), island_margin=margin)
+    if pack:
+        # Smart UV Project วางเกาะแบบกล่องสี่เหลี่ยม ใช้พื้นที่ได้ราวหนึ่งในสาม
+        # จัดใหม่ด้วยรูปทรงจริงของเกาะ (concave) + หมุนได้ทุกมุม แน่นขึ้นเกือบเท่าตัว
+        bpy.ops.uv.select_all(action="SELECT")
+        try:
+            bpy.ops.uv.pack_islands(udim_source="CLOSEST_UDIM", rotate=True,
+                                    rotate_method="ANY", scale=True, merge_overlap=False,
+                                    margin_method="FRACTION", margin=margin,
+                                    shape_method="CONCAVE")
+        except TypeError:
+            bpy.ops.uv.pack_islands(rotate=True, margin=margin)
+        say("จัดเกาะ UV ใหม่ให้แน่นขึ้น (concave pack)")
     bpy.ops.object.mode_set(mode="OBJECT")
     say("กาง UV ใหม่แล้ว")
 
@@ -238,6 +250,62 @@ def fit_photo(pts_u: np.ndarray, pts_v: np.ndarray, alpha: np.ndarray,
     def to_px(u, v):
         return cx + (u - cu) * s, cy - (v - cv) * s
 
+    to_px.params = (s, cy, cv)
+    return to_px
+
+
+def fit_shared(ref_params, pts_u: np.ndarray, pts_v: np.ndarray, alpha: np.ndarray,
+               band=(0.38, 0.52)):
+    """ทาบ mesh กับภาพโดยยืมสเกลและแนวตั้งจากภาพอ้างอิง (ปกติคือ front)
+
+    ใช้เมื่อภาพทุกใบถ่ายระยะเดียวกันและตั้งความสูงตรงกันอยู่แล้ว แต่เงาของบาง
+    มุมไม่ตรงกับ mesh (เช่นหางคนละทิศ แขนคนละท่า) จนการเทียบพื้นที่/จุดศูนย์ถ่วง
+    ทั้งเงาดึงภาพเพี้ยน — เหลือหาแค่ตำแหน่งแนวนอน จากแถบลำตัวช่วง band
+    (สัดส่วนจากหัวลงมา) ที่ไม่มีแขนและหางมาปน
+    """
+    s, cy, cv = ref_params
+    vmax, vmin = pts_v.max(), pts_v.min()
+    lo = vmax - band[1] * (vmax - vmin)
+    hi = vmax - band[0] * (vmax - vmin)
+    sel = (pts_v > lo) & (pts_v < hi)
+    mesh_u = pts_u[sel].mean()
+    r0 = int(cy - (hi - cv) * s)
+    r1 = int(cy - (lo - cv) * s)
+    rows = alpha[max(r0, 0):max(r1, 1)] > 0.5
+    ys, xs = np.nonzero(rows)
+    cx = xs.mean() if len(xs) else alpha.shape[1] / 2
+
+    def to_px(u, v):
+        return cx + (u - mesh_u) * s, cy - (v - cv) * s
+
+    return to_px
+
+
+# กล้องมุมบน: มองลงจาก +Z ภาพมีหัวอยู่ด้านบน (= ทิศหน้า -Y) ขวาของภาพ = ขวาของตัวละคร (-X)
+TOP_AXES = (np.array([0.0, 0.0, 1.0]), np.array([-1.0, 0.0, 0.0]), np.array([0.0, -1.0, 0.0]))
+
+
+def fit_top(pts_u: np.ndarray, pts_v: np.ndarray, alpha: np.ndarray):
+    """ทาบ mesh กับภาพมุมบนด้วยแขนที่กาง T-pose ซึ่งเป็นส่วนที่กว้างที่สุดในภาพ
+
+    ภาพมุมบนเป็น perspective ส่วนที่อยู่ต่ำ (ขา หาง) จะเล็กลง การเทียบทั้งเงาจึง
+    เพี้ยน ใช้ระยะปลายนิ้วถึงปลายนิ้วหาสเกล แล้วจับแนวแขนให้ตรงกันในแนวตั้ง
+    ผลจึงแม่นเฉพาะช่วงความสูงระดับไหล่ จึงควรใช้คู่กับ --top-zmin
+    """
+    m = alpha > 0.5
+    cols = np.nonzero(m.any(0))[0]
+    x0, x1 = cols.min(), cols.max()
+    width = m.sum(1)
+    arm_row = float(np.argmax(width))
+    umin, umax = pts_u.min(), pts_u.max()
+    s = (x1 - x0) / max(umax - umin, 1e-9)
+    cx, cu = (x0 + x1) / 2.0, (umin + umax) / 2.0
+    arms = np.abs(pts_u - cu) > 0.6 * (umax - umin) / 2.0
+    cv = pts_v[arms].mean() if arms.any() else pts_v.mean()
+
+    def to_px(u, v):
+        return cx + (u - cu) * s, arm_row - (v - cv) * s
+
     return to_px
 
 
@@ -332,11 +400,16 @@ def fit_ring(verts: np.ndarray, shadows: dict[str, np.ndarray], order: list[str]
 # --------------------------------------------------------------------------- raster
 
 
-def raster_depth(verts, tris, az, size, to_px):
-    """z-buffer แบบ orthographic ของมุม az ใช้ตอบว่าพิกเซลนั้นเห็นผิวที่ลึกเท่าไร"""
-    toward, right = basis(az)
+def raster_depth(verts, tris, az, size, to_px, axes=None):
+    """z-buffer แบบ orthographic ของมุม az ใช้ตอบว่าพิกเซลนั้นเห็นผิวที่ลึกเท่าไร
+    axes=(toward, right, up) ใช้แทน az ได้ สำหรับกล้องที่ไม่ได้อยู่ระดับสายตา เช่นมุมบน"""
+    if axes is None:
+        toward, right = basis(az)
+        up = UP
+    else:
+        toward, right, up = axes
     u = verts @ right
-    v = verts @ UP
+    v = verts @ up
     d = verts @ toward  # ยิ่งมากยิ่งใกล้กล้อง
     px, py = to_px(u, v)
 
@@ -506,16 +579,33 @@ def main() -> None:
     ap.add_argument("--sharpness", type=float, default=8.0,
                     help="ยิ่งสูง ความถี่สูงยิ่งมาจากมุมที่ดีที่สุดมุมเดียว "
                          "(คมขึ้นแต่เสี่ยงรอยต่อ) 1 = เท่าน้ำหนักปกติ")
+    ap.add_argument("--ring", default=",".join(RING),
+                    help="ชื่อมุมที่ใช้ เรียงตามลำดับวนรอบตัว คั่นด้วยจุลภาค "
+                         "เช่น front,right,back,left สำหรับชุดสี่มุม")
+    ap.add_argument("--az", default=None,
+                    help="กำหนดมุมกล้องเอง (องศา) แทนการเดาจากเงา เช่น "
+                         "front:0,left:90,back:180,right:270 ใช้เมื่อ mesh หันหน้า +Z "
+                         "ของ glTF อยู่แล้ว และภาพข้างมีท่าไม่ตรงกับ mesh จนเดาจากเงาไม่ได้")
+    ap.add_argument("--shared-scale", default=None,
+                    help="ชื่อมุมอ้างอิง (เช่น front) ให้ภาพอื่นใช้สเกลและแนวตั้งเดียวกัน "
+                         "หาเฉพาะตำแหน่งแนวนอนจากแถบลำตัว")
+    ap.add_argument("--top", type=Path, default=None,
+                    help="ภาพ cutout RGBA มุมบน (หัวอยู่ด้านบนของภาพ) ใช้เติมสีท้ายทอย ไหล่ หลังมือ")
+    ap.add_argument("--top-zmin", type=float, default=0.15,
+                    help="รับสีจากภาพมุมบนเฉพาะผิวที่สูงกว่านี้ (แกน Z ของ Blender) "
+                         "เพราะภาพเป็น perspective ส่วนที่ต่ำลงไปจะทาบไม่ตรง")
+    ap.add_argument("--pack", action="store_true",
+                    help="จัดเกาะ UV ใหม่ด้วยรูปทรงจริง ใช้พื้นที่ texture คุ้มขึ้น (ช้าลงบ้าง)")
     ap.add_argument("--keep-uv", action="store_true",
                     help="ใช้ UV เดิมของไฟล์ แทนที่จะกางใหม่")
     args = ap.parse_args(argv)
 
     obj = load_mesh(args.mesh, weld=not args.keep_uv)
-    unwrap(obj, args.margin, args.keep_uv)
+    unwrap(obj, args.margin, args.keep_uv, args.pack)
     verts, normals, tris, tri_uv = mesh_arrays(obj)
 
     images, order = {}, []
-    for view in RING:
+    for view in [v.strip() for v in args.ring.split(",") if v.strip()]:
         hits = list(args.views.glob(f"*_{view}.png"))
         if not hits:
             raise SystemExit(f"ไม่พบภาพมุม {view} ใน {args.views}")
@@ -523,9 +613,21 @@ def main() -> None:
         images[name] = read_png(hits[0])
         order.append(name)
 
-    shadows = {n: photo_shadow(img[..., 3]) for n, img in images.items()}
-    best_flip, best_az, score = fit_ring(verts, shadows, order)
-    say(f"เทียบเงาได้ IoU เฉลี่ย {score:.2f}")
+    if args.az:
+        fixed = {k.strip(): math.radians(float(v)) for k, v in
+                 (item.split(":") for item in args.az.split(","))}
+        best_az = {}
+        for name in order:
+            key = next((k for k in fixed if name.endswith(k)), None)
+            if key is None:
+                raise SystemExit(f"--az ไม่ได้ระบุมุมของ {name}")
+            best_az[name] = fixed[key]
+        best_flip = False
+        say("ใช้มุมกล้องตามที่กำหนดใน --az ไม่เดาจากเงา")
+    else:
+        shadows = {n: photo_shadow(img[..., 3]) for n, img in images.items()}
+        best_flip, best_az, score = fit_ring(verts, shadows, order)
+        say(f"เทียบเงาได้ IoU เฉลี่ย {score:.2f}")
 
     # หมุนให้ภาพ front อยู่ที่ 0 องศา — ขั้นต่อไป (tools/autorig.py) ต้องการให้
     # ตัวละครหันหน้าไป +Z ของ glTF ซึ่งตรงกับ -Y ของ Blender พอดี
@@ -583,23 +685,56 @@ def main() -> None:
         inside[name] = depth_in / pad
         say(f"  ไล่น้ำหนักขอบ {name} ลึก {pad} พิกเซล")
 
-    for name, img in images.items():
-        az = best_az[name]
-        toward, right = basis(az)
-        mesh_u, mesh_v = verts @ right, verts @ UP
-        to_px = fit_photo(mesh_u, mesh_v, img[..., 3])
+    ref_params = None
+    if args.shared_scale:
+        ref = next(n for n in images if n.endswith(args.shared_scale))
+        _, r_right = basis(best_az[ref])
+        ref_params = fit_photo(verts @ r_right, verts @ UP, images[ref][..., 3]).params
+        say(f"ใช้สเกล/แนวตั้งจาก {ref} กับทุกภาพ")
+
+    cams = list(images.items())
+    if args.top is not None:
+        top_img = read_png(args.top)
+        pad = max(1, int(round(args.edge_guard * top_img.shape[0])))
+        depth_in = np.zeros(top_img.shape[:2])
+        shrunk = top_img[..., 3] > 0.5
+        for _ in range(pad):
+            shrunk = ~grow(~shrunk, 1)
+            depth_in += shrunk
+        inside["top"] = depth_in / pad
+        cams.append(("top", top_img))
+        say(f"เพิ่มภาพมุมบน {args.top.name} (รับเฉพาะผิวสูงกว่า z={args.top_zmin})")
+
+    for name, img in cams:
+        if name == "top":
+            toward, right, up = TOP_AXES
+            mesh_u, mesh_v = verts @ right, verts @ up
+            to_px = fit_top(mesh_u[verts[:, 2] > args.top_zmin],
+                            mesh_v[verts[:, 2] > args.top_zmin], img[..., 3])
+            axes = TOP_AXES
+            az = None
+        else:
+            az = best_az[name]
+            toward, right = basis(az)
+            up = UP
+            axes = None
+            mesh_u, mesh_v = verts @ right, verts @ UP
+            if ref_params is not None:
+                to_px = fit_shared(ref_params, mesh_u, mesh_v, img[..., 3])
+            else:
+                to_px = fit_photo(mesh_u, mesh_v, img[..., 3])
         # z-buffer ใช้กรอบของตัวเอง ไม่ต้องตรงกับภาพ ขอแค่ครอบ mesh ให้พอดี
         to_depth_px = fit_screen(mesh_u, mesh_v,
                                  (0, args.depth_size, 0, args.depth_size), None)
-        depth = raster_depth(verts, tris, az, args.depth_size, to_depth_px)
+        depth = raster_depth(verts, tris, az, args.depth_size, to_depth_px, axes)
 
         # ใช้ค่าสัมบูรณ์ เพราะ mesh จาก marching cubes มีหน้าที่นอร์มอลกลับด้าน
         # ปนอยู่เป็นหย่อม ถ้าตัดด้วยเครื่องหมาย หย่อมพวกนั้นจะไม่ได้สีจากมุมไหนเลย
         # กลายเป็นรูดำ ส่วนเรื่องถูกบังหรือไม่ ปล่อยให้ z-buffer ข้างล่างตัดสิน
         facing = np.abs(flat_nrm @ toward)
         keep = facing > 0.05
-        px, py = to_px(flat_pos @ right, flat_pos @ UP)
-        dpx, dpy = to_depth_px(flat_pos @ right, flat_pos @ UP)
+        px, py = to_px(flat_pos @ right, flat_pos @ up)
+        dpx, dpy = to_depth_px(flat_pos @ right, flat_pos @ up)
 
         ix = np.clip(dpx.astype(np.int32), 0, args.depth_size - 1)
         iy = np.clip(dpy.astype(np.int32), 0, args.depth_size - 1)
@@ -616,6 +751,9 @@ def main() -> None:
         edge = inside[name][gy, gx]
         w = np.where(keep & visible & (a > 0.98),
                      np.clip(facing, 0, 1) ** args.power * edge, 0.0)
+        if name == "top":
+            # perspective: ทาบตรงเฉพาะช่วงระดับไหล่ จางออกใต้ top-zmin
+            w *= np.clip((flat_pos[:, 2] - args.top_zmin) / 0.05, 0.0, 1.0)
 
         lin = srgb_to_linear(rgb)
         acc[hit] += lin * w[..., None]
