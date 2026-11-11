@@ -51,7 +51,11 @@ for p in me.data.polygons:
 print(f"[rig] faces {n0:,} -> {len(me.data.polygons):,}")
 
 # ---- 2. armature
-B = json.load(open(bones_json, encoding="utf-8"))
+META = json.load(open(bones_json, encoding="utf-8"))
+# รับได้ทั้งไฟล์แบบเก่า (list ของกระดูก) และแบบใหม่ {"bones": [...], "jaw": {...}, "arms_down": bool}
+B = META["bones"] if isinstance(META, dict) else META
+META = META if isinstance(META, dict) else {}
+J = {"mouth_y": 0.665, "z0": 0.13, "z1": 0.21, "cx": -0.02, "hw": 0.16, **META.get("jaw", {})}
 arm_data = bpy.data.armatures.new("croc_rig")
 arm = bpy.data.objects.new("croc_rig", arm_data)
 bpy.context.scene.collection.objects.link(arm)
@@ -111,9 +115,10 @@ jaw_ids = []
 gi = {g.index: g.name for g in me.vertex_groups}
 for v in verts:
     gx, gy, gz = v.co.x, v.co.z, -v.co.y
-    if gy < 0.55 or gz < 0.10:
+    if gy < J["mouth_y"] - 0.11 or gz < J["z0"] - 0.03:
         continue
-    w = ramp(0.675 - gy, 0.0, 0.03) * ramp(gz, 0.13, 0.21) * ramp(0.19 - abs(gx + 0.02), 0.0, 0.04)
+    w = (ramp(J["mouth_y"] + 0.01 - gy, 0.0, 0.03) * ramp(gz, J["z0"], J["z1"])
+         * ramp(J["hw"] + 0.03 - abs(gx - J["cx"]), 0.0, 0.04))
     old = {gi[g.group]: g.weight for g in v.groups if gi[g.group] in vg}
     if w <= 0.0:
         if old.get("jaw", 0) > 0:          # ส่วนบนของหัว: เอา jaw ออก ให้ head แทน
@@ -128,6 +133,59 @@ for v in verts:
     if not rest:
         vg["head"].add([v.index], 1 - w, "REPLACE")
     vg["jaw"].add([v.index], w, "REPLACE")
+
+# ---- แยกน้ำหนักระหว่างกลุ่มที่อยู่ชิดกันแต่ต้องขยับแยกกัน (หางชิดขา แขนห้อยชิดสะโพก)
+# heat weighting มักเกลี่ยข้ามกลุ่ม พอขาก้าวหางเลยติดไปด้วย จุดที่มีน้ำหนักจากหลาย
+# กลุ่มต้องห้าม จะเก็บเฉพาะกลุ่มที่มีกระดูกใกล้ที่สุด (วัดระยะถึงแกนกระดูก) แล้ว normalize
+import numpy as np
+
+
+def group_of(n):
+    if n.startswith("tail."):
+        return "tail"
+    for side in ("L", "R"):
+        if n.endswith("." + side):
+            if n.split(".")[0] in ("thigh", "shin", "foot", "toe"):
+                return "leg" + side
+            if n.split(".")[0] in ("upper_arm", "forearm", "hand", "thumb", "finger1", "finger2", "finger3"):
+                return "arm" + side
+    return None
+
+
+grp = {n: group_of(n) for n in deform}
+P = np.array([v.co[:] for v in verts])
+dist = {}
+for n in deform:
+    if grp[n] is None:
+        continue
+    a = np.array(segs[n][0][:]); bvec = np.array(segs[n][1][:]) - a
+    t = np.clip(((P - a) @ bvec) / max(bvec @ bvec, 1e-12), 0, 1)
+    dist[n] = np.linalg.norm(P - (a + t[:, None] * bvec), axis=1)
+gnames = sorted({g for g in grp.values() if g})
+gdist = np.stack([np.min(np.stack([dist[n] for n in deform if grp[n] == g]), axis=0) for g in gnames])
+nearest = [gnames[i] for i in np.argmin(gdist, axis=0)]
+gi2 = {g.index: g.name for g in me.vertex_groups}
+fixed = 0
+for v in verts:
+    ws = {gi2[g.group]: g.weight for g in v.groups if gi2[g.group] in vg and g.weight > 1e-4}
+    gs = {grp[n] for n in ws if grp[n]}
+    if len(gs) < 2:
+        continue
+    keep_g = nearest[v.index]
+    drop = [n for n in ws if grp[n] and grp[n] != keep_g]
+    if not drop:
+        continue
+    rest = {n: w for n, w in ws.items() if n not in drop}
+    if not rest:      # ไม่มีน้ำหนักของกลุ่มที่ใกล้สุดเลย ให้กระดูกใกล้สุดในกลุ่มนั้น
+        best = min((n for n in deform if grp[n] == keep_g), key=lambda n: dist[n][v.index])
+        rest = {best: 1.0}
+    tot = sum(rest.values())
+    for n in drop:
+        vg[n].remove([v.index])
+    for n, w in rest.items():
+        vg[n].add([v.index], w / tot, "REPLACE")
+    fixed += 1
+print(f"[rig] แยกน้ำหนักข้ามกลุ่ม (หาง/ขา/แขน) {fixed} จุด")
 
 counts = {n: 0 for n in deform}
 for v in verts:
@@ -165,8 +223,12 @@ def key_all(frame):
 arm.animation_data_create()
 arm.animation_data.action = bpy.data.actions.new("test_pose")
 key_all(1)
-rot("upper_arm.L", (0, 1, 0), 55); rot("upper_arm.R", (0, 1, 0), -55)
-rot("forearm.L", (0, 0, 1), -40); rot("forearm.R", (0, 0, 1), 40)
+if META.get("arms_down"):     # แขนห้อยลงอยู่แล้ว: แกว่งแขนซ้ายไปหน้า ขวาไปหลัง งอศอก
+    rot("upper_arm.L", (1, 0, 0), -40); rot("upper_arm.R", (1, 0, 0), 30)
+    rot("forearm.L", (1, 0, 0), -35); rot("forearm.R", (1, 0, 0), -20)
+else:                          # ท่า T: หุบแขนลง แล้วงอศอกไปหน้า
+    rot("upper_arm.L", (0, 1, 0), 55); rot("upper_arm.R", (0, 1, 0), -55)
+    rot("forearm.L", (0, 0, 1), -40); rot("forearm.R", (0, 0, 1), 40)
 rot("head", (0, 0, 1), 25); rot("jaw", (1, 0, 0), 15)
 rot("chest", (0, 0, 1), -10)
 rot("thigh.L", (1, 0, 0), -35); rot("shin.L", (1, 0, 0), 50)

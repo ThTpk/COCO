@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Croc – web viewer</title>
+<style>
+  html,body{margin:0;height:100%;background:#1e2126;color:#eee;font-family:system-ui,sans-serif;overflow:hidden}
+  #ui{position:fixed;left:0;right:0;bottom:16px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap;padding:0 12px}
+  button{background:#2f343c;color:#eee;border:1px solid #4a515c;border-radius:8px;padding:8px 14px;font-size:15px;cursor:pointer}
+  button.on{background:#d9772e;border-color:#d9772e;color:#111}
+  #msg{position:fixed;top:12px;left:12px;font-size:13px;opacity:.8}
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="msg">กำลังโหลดโมเดล…</div>
+<div id="ui"></div>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const MODEL = 'croc_web_v1_2k.glb';          // ใช้ croc_web_v1_2k_nodraco.glb ได้ถ้าไม่อยากพึ่ง Draco decoder
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.shadowMap.enabled = true;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x1e2126);
+const camera = new THREE.PerspectiveCamera(35, innerWidth / innerHeight, 0.05, 100);
+camera.position.set(2.2, 1.4, 4.2);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 1, 0); controls.enableDamping = true; controls.update();
+
+scene.add(new THREE.HemisphereLight(0xffffff, 0x444455, 1.6));
+const sun = new THREE.DirectionalLight(0xffffff, 2.2);
+sun.position.set(3, 5, 4); sun.castShadow = true; sun.shadow.mapSize.set(2048, 2048);
+Object.assign(sun.shadow.camera, { left: -2, right: 2, top: 3, bottom: -1 });
+scene.add(sun);
+const ground = new THREE.Mesh(new THREE.CircleGeometry(3, 64), new THREE.MeshStandardMaterial({ color: 0x2a2e35 }));
+ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true; scene.add(ground);
+
+const draco = new DRACOLoader();
+draco.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.7/');
+const loader = new GLTFLoader(); loader.setDRACOLoader(draco);
+
+let mixer, current;
+const clock = new THREE.Clock();
+loader.load(MODEL, (gltf) => {
+  const root = gltf.scene;
+  root.traverse(o => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+  // โมเดลอยู่ในช่วง y -1..1 (สูงราว 2 หน่วย) ยกให้เท้าแตะพื้น
+  const box = new THREE.Box3().setFromObject(root);
+  root.position.y -= box.min.y;
+  scene.add(root);
+  mixer = new THREE.AnimationMixer(root);
+  const ui = document.getElementById('ui'); const btns = {};
+  const play = (clip) => {
+    const next = clip ? mixer.clipAction(clip) : null;
+    if (current && current !== next) current.fadeOut(0.25);
+    if (next) next.reset().fadeIn(0.25).play();
+    current = next;
+    for (const [n, b] of Object.entries(btns)) b.classList.toggle('on', clip ? n === clip.name : n === '_rest');
+  };
+  const add = (name, label, clip) => { const b = document.createElement('button'); b.textContent = label; b.onclick = () => play(clip); ui.appendChild(b); btns[name] = b; };
+  add('_rest', 'ท่าพัก', null);
+  const TH = { Idle: 'ยืน', Walk: 'เดิน', Run: 'วิ่ง', Jump: 'กระโดด', TailSwing: 'แกว่งหาง' };
+  for (const c of gltf.animations) add(c.name, TH[c.name] || c.name, c);
+  play(gltf.animations.find(c => c.name === 'Idle') || null);
+  document.getElementById('msg').textContent = 'ลากเพื่อหมุน • เลื่อนเพื่อซูม';
+}, undefined, (e) => { document.getElementById('msg').textContent = 'โหลดไม่สำเร็จ: ' + e.message + ' (ต้องเปิดผ่าน web server ไม่ใช่ file://)'; });
+
+addEventListener('resize', () => { camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight); });
+renderer.setAnimationLoop(() => { const dt = clock.getDelta(); if (mixer) mixer.update(dt); controls.update(); renderer.render(scene, camera); });
+</script>
+</body>
+</html>

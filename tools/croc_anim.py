@@ -4,7 +4,7 @@
         --src output/rig/croc_rigged_apose_v1.blend --dst output/croc_kmitl_rigged.glb \
         --draco --jpeg 90 --tex-size 2048 --map-size 1024
 
-ได้สี่คลิป: Idle (ยืน), Walk (เดิน), Jump (กระโดด), TailSwing (แกว่งหาง) ส่วนปุ่ม
+ได้ห้าคลิป: Idle (ยืน), Walk (เดิน), Run (วิ่ง), Jump (กระโดด), TailSwing (แกว่งหาง) ส่วนปุ่ม
 "ท่าพัก" ในหน้าเว็บไม่ใช่คลิป มันคือการหยุดเล่นแล้วปล่อยให้ตัวกลับไปที่ rest pose
 
 ต่างจาก tools/unirig_anim.py ตรงที่ไม่ต้องเดาว่ากระดูกไหนคืออะไร โครงชุดนี้มาจาก
@@ -141,9 +141,35 @@ def clips(fps: int = 24, leg: float = 1.0) -> dict:
         ch("head", "Z", amp=3.0, phase=0.55),
     ]
 
+    # วิ่ง: รอบเร็วกว่าเดินเกือบเท่าตัว ก้าวยาวขึ้น เข่าพับลึกตอนเหวี่ยงขากลับ
+    # ลำตัวโน้มไปหน้าค้างไว้ (offset) หัวเงยชดเชยให้สายตายังมองตรง แขนงอศอกค้างแล้ว
+    # เหวี่ยงแรงสวนขา ตัวเด้งขึ้นลงสองครั้งต่อรอบ และหางสะบัดถ่วงสวนสะโพก
+    run = [
+        ch("thigh.R", "X", amp=-40 * leg, offset=-6 * leg, phase=0.00),
+        ch("thigh.L", "X", amp=-40 * leg, offset=-6 * leg, phase=0.50),
+        ch("shin.R", "X", amp=78 * leg, phase=0.58, mode="halfsin"),
+        ch("shin.L", "X", amp=78 * leg, phase=0.08, mode="halfsin"),
+        ch("foot.R", "X", amp=-20, phase=0.30),
+        ch("foot.L", "X", amp=-20, phase=0.80),
+        ch("toe.R", "X", amp=-22, phase=0.40, mode="halfsin"),
+        ch("toe.L", "X", amp=-22, phase=0.90, mode="halfsin"),
+        ch("upper_arm.R", "X", amp=34, phase=0.00),
+        ch("upper_arm.L", "X", amp=34, phase=0.50),
+        ch("forearm.R", "X", amp=14, offset=-55, phase=0.08),
+        ch("forearm.L", "X", amp=14, offset=-55, phase=0.58),
+        ch("spine", "X", amp=1.5, offset=7, harmonic=2),
+        ch("chest", "X", amp=1.5, offset=6, harmonic=2, phase=0.05),
+        ch("neck", "X", amp=-1.5, offset=-9, harmonic=2, phase=0.10),
+        ch("spine", "Z", amp=5.0), ch("chest", "Z", amp=4.0, phase=0.05),
+        ch("hips", "Z", amp=-7.0),
+        ch("jaw", "X", amp=3.0, offset=5.0, harmonic=2, phase=0.2),
+        ch("hips", "Z", amp=0.055, harmonic=2, phase=0.25, kind="loc"),
+    ] + tail_wave(first=5.0, last=22.0, step=0.11, phase0=0.5)
+
     out = [
         {"name": "Idle", "frames": 64, "channels": idle},
         {"name": "Walk", "frames": 32, "channels": walk},
+        {"name": "Run", "frames": 18, "channels": run},
         {"name": "Jump", "frames": 48, "channels": jump},
         {"name": "TailSwing", "frames": 40, "channels": swing},
     ]

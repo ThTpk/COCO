@@ -7,7 +7,7 @@ __pycache__/
 # --- ผลลัพธ์ที่ pipeline สร้างเอง -------------------------------------------
 # ไม่เก็บของที่รันใหม่ได้ ยกเว้นไฟล์เดียวที่หน้าเว็บต้องใช้ (ดูข้อยกเว้นข้างล่าง)
 output/*
-# แปดโมเดลที่หน้าเว็บสลับดูได้ ต้องอยู่ใน repo ไม่งั้นหน้าเว็บพัง
+# เก้าโมเดลที่หน้าเว็บสลับดูได้ ต้องอยู่ใน repo ไม่งั้นหน้าเว็บพัง
 !output/character_rigged.glb
 !output/character2_rigged.glb
 !output/character3_rigged.glb
@@ -17,11 +17,18 @@ output/*
 !output/croc_photo_unirig_rigged.glb
 !output/croc_kmitl_rigged.glb
 
+# โมเดลที่ 9 อยู่ใน output/web/ คู่กับหน้า three.js เปล่า ๆ ของมันเอง
+!output/web/
+output/web/*
+!output/web/croc_web_v1_2k.glb
+!output/web/index.html
+
 # ตำแหน่งข้อต่อ 47 ข้อของโมเดลที่ 8 วางด้วยมือทีละข้อ ไม่ใช่ผลที่ pipeline คำนวณได้เอง
 # ถ้าไม่เก็บไว้ tools/rig_croc.py จะไม่มีอะไรให้อ่านตอนปั้นโครงใหม่
 !output/rig/
 output/rig/*
 !output/rig/croc_bones.json
+!output/rig/croc_alb_bones.json
 
 # ภาพตรวจงานระหว่างทาง สร้างใหม่ได้ทุกเมื่อด้วย --debug
 output/debug/
